@@ -1,0 +1,82 @@
+# RoboMaster 自动攻击系统配置文件
+
+# 相机配置
+camera:
+  device_index: 0
+  frame_rate: 30.0
+  width: 1920
+  height: 1080
+  trigger_mode: false  # false: 连续模式, true: 触发模式
+
+# 模型配置
+model:
+  path: "best.onnx"  # YOLO模型路径 (需要将.pt模型转换为.onnx格式)
+  input_width: 640
+  input_height: 640
+  confidence_threshold: 0.3
+
+# 类别名称
+classes:
+  - "blue100"
+  - "blue200"
+  - "blue300"
+  - "blue400"
+  - "blue500"
+  - "red100"
+  - "red200"
+  - "red300"
+  - "red400"
+  - "red500"
+
+# 云台配置
+gimbal:
+  serial_port: "/dev/ttyACM0"  # Windows: "COM3", Linux: "/dev/ttyACM0"
+  baud_rate: 115200
+  can_id: 0x601  # 发送CAN ID
+  pic_angle_min: 0
+  pic_angle_max: 30000
+  yaw_angle_min: 0
+  yaw_angle_max: 30000
+
+# 俯仰角映射 (标签到俯仰角度)
+elevation_mapping:
+  blue100: 6000
+  blue200: 8500
+  blue300: 9500
+  blue400: 10000
+  blue500: 14500
+  red100: 8000
+  red200: 10000
+  red300: 14000
+  red400: 18000
+  red500: 20000
+
+# 巡航配置
+patrol:
+  enabled: true
+  center_angle: 15000
+  patrol_range: 13000
+  patrol_speed: 50
+  patrol_delay: 0.03
+  acceleration_zone: 500
+  min_speed: 30
+
+# 检测配置
+detection:
+  target_type: "red"  # "red" 或 "blue"
+  center_margin: 100
+  step_size: 25
+  target_lost_timeout: 1.0  # 秒
+
+# 射击配置
+shooting:
+  shooting_delay: 0.0  # 锁定后开始射击的延迟 (秒)
+  shoot_pulse_on: 0.4  # 射击脉冲开启时间 (秒)
+  shoot_pulse_off: 0.2  # 射击脉冲关闭时间 (秒)
+  max_shoot_duration: 3.0  # 单次射击最大持续时间 (秒)
+
+# 日志配置
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "rm_auto_attack.log"
+  console: true
