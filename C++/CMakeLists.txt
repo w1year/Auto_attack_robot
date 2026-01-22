@@ -20,8 +20,42 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # 查找依赖库
+# 优先使用/usr/local下的新版本OpenCV (with CUDA)
+set(OpenCV_DIR "/usr/local/lib/cmake/opencv4" CACHE PATH "OpenCV config directory")
 find_package(OpenCV REQUIRED)
+
+# 如果找不到，尝试默认路径
+if(NOT OpenCV_FOUND)
+    find_package(OpenCV REQUIRED)
+endif()
+
+# 检查OpenCV是否支持CUDA
+if(OpenCV_CUDA_VERSION)
+    message(STATUS "OpenCV CUDA支持: 已启用 (版本: ${OpenCV_CUDA_VERSION})")
+    add_compile_definitions(OPENCV_CUDA_ENABLED)
+else()
+    message(STATUS "OpenCV CUDA支持: 未启用 (如需CUDA加速，请重新编译OpenCV并启用CUDA)")
+endif()
+
 find_package(Threads REQUIRED)
+
+# 查找OpenMP（用于并行处理）
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP支持: 已启用")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+else()
+    message(STATUS "OpenMP支持: 未找到（将使用单线程处理）")
+endif()
+
+# 可选：查找CUDA工具包（用于更详细的CUDA信息）
+find_package(CUDA QUIET)
+if(CUDA_FOUND)
+    message(STATUS "CUDA工具包已找到: ${CUDA_VERSION}")
+    message(STATUS "CUDA架构: ${CUDA_ARCH_BIN}")
+else()
+    message(STATUS "CUDA工具包未找到（不影响使用，OpenCV可能已静态链接CUDA）")
+endif()
 
 # ONNX Runtime (用于YOLO模型推理)
 # 如果系统中已安装ONNX Runtime，取消注释以下行并设置路径
@@ -59,6 +93,54 @@ if(EXISTS ${MVS_SDK_PATH})
     add_compile_definitions(MVS_SDK_ENABLED)
 endif()
 
+# 查找TensorRT
+find_library(TENSORRT_LIB nvinfer
+    PATHS
+    /usr/lib/aarch64-linux-gnu
+    /usr/local/lib
+    /usr/lib
+)
+find_path(TENSORRT_INCLUDE NvInfer.h
+    PATHS
+    /usr/include/aarch64-linux-gnu
+    /usr/local/include
+    /usr/include
+)
+
+# 查找CUDA（TensorRT需要）
+# 首先尝试通过CUDA包查找
+find_package(CUDA QUIET)
+if(CUDA_FOUND AND CUDA_INCLUDE_DIRS)
+    set(CUDA_INCLUDE ${CUDA_INCLUDE_DIRS})
+    message(STATUS "通过find_package找到CUDA: ${CUDA_INCLUDE}")
+else()
+    # 手动查找CUDA头文件
+    find_path(CUDA_INCLUDE cuda_runtime_api.h
+        PATHS
+        /usr/local/cuda/include
+        /usr/local/cuda-11.8/include
+        /usr/local/cuda-11.4/include
+        /usr/local/cuda-11.4/targets/aarch64-linux/include
+        /usr/include
+    )
+    if(CUDA_INCLUDE)
+        message(STATUS "手动找到CUDA头文件: ${CUDA_INCLUDE}")
+    endif()
+endif()
+
+if(TENSORRT_LIB AND TENSORRT_INCLUDE)
+    message(STATUS "TensorRT已找到: ${TENSORRT_LIB}")
+    message(STATUS "TensorRT头文件: ${TENSORRT_INCLUDE}")
+    if(CUDA_INCLUDE)
+        message(STATUS "CUDA头文件: ${CUDA_INCLUDE}")
+    endif()
+    add_compile_definitions(TENSORRT_ENABLED)
+    set(TENSORRT_FOUND TRUE)
+else()
+    message(STATUS "TensorRT未找到，将使用OpenCV DNN后端")
+    set(TENSORRT_FOUND FALSE)
+endif()
+
 # 源文件
 set(SOURCES
     src/main.cpp
@@ -69,7 +151,17 @@ set(SOURCES
     src/gimbal/gimbal_controller.cpp
     src/utils/logger.cpp
     src/utils/config.cpp
+    src/utils/thread_optimizer.cpp
 )
+
+# 如果启用TensorRT，添加TensorRT检测器
+if(TENSORRT_FOUND)
+    list(APPEND SOURCES src/detection/yolo_detector_tensorrt.cpp)
+    message(STATUS "TensorRT支持已启用")
+endif()
+
+# 源文件列表完成后，设置优化编译选项
+# 注意：编译选项将在创建可执行文件后设置
 
 set(HEADERS
     include/camera/mvs_camera.h
@@ -79,10 +171,25 @@ set(HEADERS
     include/gimbal/gimbal_controller.h
     include/utils/logger.h
     include/utils/config.h
+    include/utils/thread_optimizer.h
 )
+
+# 如果启用TensorRT，添加TensorRT头文件
+if(TENSORRT_FOUND)
+    list(APPEND HEADERS include/detection/yolo_detector_tensorrt.h)
+endif()
 
 # 创建可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+
+# 添加性能优化编译选项（提高CPU和GPU利用率）
+target_compile_options(${PROJECT_NAME} PRIVATE
+    -march=native      # 使用本地CPU架构优化
+    -mtune=native      # 针对本地CPU调优
+    -ffast-math        # 快速数学运算（提高浮点运算速度）
+    -funroll-loops     # 循环展开（提高循环性能）
+)
+# 注意：O3已在全局设置（第14行），这里不再重复
 
 # 链接库
 target_link_libraries(${PROJECT_NAME}
@@ -90,6 +197,40 @@ target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS}
     Threads::Threads
 )
+
+# 如果启用TensorRT，链接TensorRT库
+if(TENSORRT_FOUND)
+    target_include_directories(${PROJECT_NAME} PRIVATE 
+        ${TENSORRT_INCLUDE}
+    )
+    # 添加CUDA包含路径（如果找到）
+    if(CUDA_INCLUDE)
+        target_include_directories(${PROJECT_NAME} PRIVATE ${CUDA_INCLUDE})
+    endif()
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${TENSORRT_LIB}
+        nvinfer_plugin
+        nvonnxparser
+        cudart
+    )
+    # 添加CUDA库路径
+    find_library(CUDART_LIB cudart
+        PATHS
+        /usr/local/cuda/lib64
+        /usr/local/cuda-11.8/lib64
+        /usr/local/cuda-11.4/lib64
+        /usr/lib/aarch64-linux-gnu
+    )
+    if(CUDART_LIB)
+        target_link_directories(${PROJECT_NAME} PRIVATE 
+            ${CMAKE_SYSTEM_LIBRARY_PATH}
+            /usr/local/cuda/lib64
+            /usr/local/cuda-11.8/lib64
+            /usr/local/cuda-11.4/lib64
+        )
+    endif()
+    message(STATUS "TensorRT库已链接")
+endif()
 
 # Windows特定链接
 if(WIN32)
