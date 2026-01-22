@@ -18,7 +18,7 @@ struct CameraParams {
     int width = 0;
     int height = 0;
     int payloadSize = 0;
-    float frameRate = 30.0f;
+    float frameRate = 60.0f;  // 设置为60帧以匹配目标帧率
 };
 
 class MVSCamera {
