@@ -97,19 +97,19 @@ void GimbalController::close() {
 
 bool GimbalController::setPicAngle(int angle) {
     m_picAngle = clampAngle(angle);
-    LOG_INFO("设置俯仰角度: " + std::to_string(m_picAngle.load()));
+    // 移除频繁的日志输出，减少日志量
     return sendCommand();
 }
 
 bool GimbalController::setYawAngle(int angle) {
     m_yawAngle = clampAngle(angle);
-    LOG_INFO("设置偏航角度: " + std::to_string(m_yawAngle.load()));
+    // 移除频繁的日志输出，减少日志量
     return sendCommand();
 }
 
 bool GimbalController::setShootStatus(uint16_t status) {
     m_shootStatus = status;
-    LOG_INFO("设置发射状态: " + std::to_string(status));
+    // 移除频繁的日志输出，减少日志量
     return sendCommand();
 }
 
@@ -144,12 +144,12 @@ bool GimbalController::sendCommand() {
 }
 
 void GimbalController::triggerShoot() {
-    LOG_INFO("触发射击");
+    // 移除频繁的日志输出，开始射击日志在main.cpp中已输出
     setShootStatus(1);
 }
 
 void GimbalController::stopShoot() {
-    LOG_INFO("停止射击");
+    // 移除频繁的日志输出，减少日志量
     setShootStatus(0);
 }
 
