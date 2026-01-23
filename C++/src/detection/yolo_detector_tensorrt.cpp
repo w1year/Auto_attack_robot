@@ -367,7 +367,7 @@ void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpuInput
     cv::cvtColor(letterboxed, rgb, cv::COLOR_BGR2RGB);
     
     // 归一化 0~255 -> 0.0~1.0
-    rgb.convertTo(rgb, CV_32F, 1.0 / 255.0);
+    rgb.convertTo(rgb, CV_32F, 1.0);
 
     // 拷贝到 GPU 输入缓冲区 (并行加速)
     std::vector<float> inputData(m_inputWidth * m_inputHeight * 3);

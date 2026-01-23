@@ -282,7 +282,7 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             
             // 执行检测（TensorRT推理 - GPU加速），使用BGR图像进行检测
             auto detectStart = std::chrono::steady_clock::now();
-            std::vector<Detection> allDetections = detector->detect(frame, 0.01f);
+            std::vector<Detection> allDetections = detector->detect(frame, 0.5f);
             auto detectTime = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - detectStart).count();
             
