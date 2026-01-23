@@ -396,19 +396,17 @@ std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput,
     float confThreshold) {
 std::vector<Detection> detections;
 
-// ==========================================
-// 步骤 1: 获取数据并计算还原参数
-// ==========================================
+// 1. 将数据从 GPU 拷贝到 CPU
 std::vector<float> outputData(m_outputSizeElements);
 cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize, 
 cudaMemcpyDeviceToHost, m_stream);
 cudaStreamSynchronize(m_stream);
 
-// 定义模型输出维度 (根据之前的日志确认是 8400 个锚点)
+// 模型参数
 int numClasses = 10; 
 int numAnchors = 8400; 
 
-// 必须与 preprocessImage 中的逻辑完全一致
+// 计算缩放参数 (与 preprocessImage 保持一致)
 float scale = std::min((float)m_inputWidth / imgWidth, (float)m_inputHeight / imgHeight);
 int newUnpadW = (int)(imgWidth * scale);
 int newUnpadH = (int)(imgHeight * scale);
@@ -418,19 +416,21 @@ int dh = (m_inputHeight - newUnpadH) / 2;
 std::vector<Detection> tempDetections;
 tempDetections.reserve(numAnchors);
 
-// ==========================================
-// 步骤 2: 解析所有预测框
-// ==========================================
+// 用于调试：记录全图最高置信度
+float max_conf_debug = 0.0f;
+
+// 2. 解析预测框
+// 注意：如果有 OpenMP 报错，可以先把下面这行 #pragma 注释掉
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 100)
 #endif
 for (int i = 0; i < numAnchors; ++i) {
-// 寻找该锚点的最高置信度类别
-// outputData layout: [channels, anchors]
-// channels 0-3: bbox, 4-13: class scores
+// === 必须在这里定义这两个变量 ===
 int bestClassId = -1;
 float bestConf = -1.0f;
+// ============================
 
+// 寻找该锚点的最高置信度类别
 for (int c = 0; c < numClasses; ++c) {
 float conf = outputData[(4 + c) * numAnchors + i];
 if (conf > bestConf) {
@@ -439,23 +439,28 @@ bestClassId = c;
 }
 }
 
+// 记录最高分用于调试 (线程不安全但用于观察足够了)
+if (bestConf > max_conf_debug) {
+max_conf_debug = bestConf;
+}
+
+// 阈值过滤
 if (bestConf < confThreshold) {
 continue;
 }
 
-// 获取并还原坐标
+// 解析坐标
 float cx = outputData[0 * numAnchors + i];
 float cy = outputData[1 * numAnchors + i];
 float w  = outputData[2 * numAnchors + i];
 float h  = outputData[3 * numAnchors + i];
 
-// --- 核心修改：反向映射坐标 (Remove Padding & Scale) ---
+// 坐标反变换 (Map back to original image)
 cx = (cx - dw) / scale;
 cy = (cy - dh) / scale;
 w  = w / scale;
 h  = h / scale;
 
-// 转为左上角坐标
 int x1 = static_cast<int>(cx - w / 2);
 int y1 = static_cast<int>(cy - h / 2);
 int x2 = static_cast<int>(cx + w / 2);
@@ -484,17 +489,20 @@ tempDetections.push_back(det);
 }
 }
 
-// ==========================================
-// 步骤 3: NMS (非极大值抑制)
-// ==========================================
-// 先按置信度排序
+// 每60帧打印一次最高置信度，看看模型到底看到了什么
+static int log_counter = 0;
+if (log_counter++ % 60 == 0) {
+LOG_INFO("DEBUG: 当前帧全图最高置信度 = " + std::to_string(max_conf_debug));
+}
+
+// 3. NMS (非极大值抑制)
 std::sort(tempDetections.begin(), tempDetections.end(), 
 [](const Detection& a, const Detection& b) {
 return a.confidence > b.confidence;
 });
 
 std::vector<bool> isSuppressed(tempDetections.size(), false);
-float nmsThreshold = 0.45f; // NMS 阈值
+float nmsThreshold = 0.45f;
 
 for (size_t i = 0; i < tempDetections.size(); ++i) {
 if (isSuppressed[i]) continue;
@@ -503,7 +511,7 @@ detections.push_back(tempDetections[i]);
 for (size_t j = i + 1; j < tempDetections.size(); ++j) {
 if (isSuppressed[j]) continue;
 
-// 计算 IoU
+// IoU 计算
 int xx1 = std::max(tempDetections[i].x1, tempDetections[j].x1);
 int yy1 = std::max(tempDetections[i].y1, tempDetections[j].y1);
 int xx2 = std::min(tempDetections[i].x2, tempDetections[j].x2);
