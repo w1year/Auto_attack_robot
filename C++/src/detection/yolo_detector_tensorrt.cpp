@@ -387,8 +387,7 @@ void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpuInput
         }
     }
     
-    cudaMemcpyAsync(gpuInput, inputData.data(), m_inputSize, 
-                    cudaMemcpyHostToDevice, m_stream);
+    cudaMemcpy(gpuInput, inputData.data(), m_inputSize, cudaMemcpyHostToDevice);
 }
 
 std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput, 
