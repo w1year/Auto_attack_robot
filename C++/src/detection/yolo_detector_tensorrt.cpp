@@ -331,38 +331,58 @@ bool YOLODetectorTensorRT::allocateBuffers() {
 }
 
 void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpuInput) {
-    // 验证输入图像格式
-    if (image.empty()) {
-        LOG_ERROR("预处理：输入图像为空");
-        return;
-    }
-    if (image.type() != CV_8UC3 || image.channels() != 3) {
-        LOG_ERROR("预处理：图像格式错误 - type=" + std::to_string(image.type()) + 
-                 ", channels=" + std::to_string(image.channels()) + 
-                 ", 期望: CV_8UC3, 3通道");
-        return;
-    }
+    if (image.empty()) return;
+
+    // ==========================================
+    // 步骤 1: 计算 Letterbox 缩放比例和偏移量
+    // ==========================================
+    float scale = std::min((float)m_inputWidth / image.cols, (float)m_inputHeight / image.rows);
+    int newUnpadW = (int)(image.cols * scale);
+    int newUnpadH = (int)(image.rows * scale);
     
-    // 调整大小并归一化
+    // 计算黑边偏移量（让图像居中）
+    int dw = (m_inputWidth - newUnpadW) / 2;
+    int dh = (m_inputHeight - newUnpadH) / 2;
+
+    // ==========================================
+    // 步骤 2: 图像缩放与填充
+    // ==========================================
     cv::Mat resized;
-    cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
+    if (image.cols != newUnpadW || image.rows != newUnpadH) {
+        cv::resize(image, resized, cv::Size(newUnpadW, newUnpadH));
+    } else {
+        resized = image;
+    }
+
+    // 创建全黑画布 (640x640)
+    cv::Mat letterboxed = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
     
-    // 转换为RGB并归一化到[0,1]
+    // 将缩放后的图拷贝到画布中心
+    resized.copyTo(letterboxed(cv::Rect(dw, dh, newUnpadW, newUnpadH)));
+
+    // ==========================================
+    // 步骤 3: 预处理 (BGR->RGB, 归一化, HWC->CHW)
+    // ==========================================
     cv::Mat rgb;
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb, CV_32F, 1.0 / 255.0);
+    cv::cvtColor(letterboxed, rgb, cv::COLOR_BGR2RGB);
     
-    // 转换为NCHW格式并复制到GPU（并行优化）
+    // 归一化 0~255 -> 0.0~1.0
+    rgb.convertTo(rgb, CV_32F, 1.0 / 255.0);
+
+    // 拷贝到 GPU 输入缓冲区 (并行加速)
     std::vector<float> inputData(m_inputWidth * m_inputHeight * 3);
     const int totalPixels = m_inputHeight * m_inputWidth;
     
-    // 并行处理三个通道的转换，充分利用CPU多核
+    #ifdef _OPENMP
     #pragma omp parallel for num_threads(3)
+    #endif
     for (int c = 0; c < 3; ++c) {
         float* channelData = inputData.data() + c * totalPixels;
         for (int h = 0; h < m_inputHeight; ++h) {
             for (int w = 0; w < m_inputWidth; ++w) {
-                channelData[h * m_inputWidth + w] = rgb.at<cv::Vec3f>(h, w)[c];
+                // 指针访问比 at() 更快
+                const float* rowPtr = rgb.ptr<float>(h);
+                channelData[h * m_inputWidth + w] = rowPtr[w * 3 + c];
             }
         }
     }
@@ -372,102 +392,144 @@ void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpuInput
 }
 
 std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput, 
-                                                                int imgWidth, 
-                                                                int imgHeight, 
-                                                                float confThreshold) {
-    std::vector<Detection> detections;
-    
-    // 将输出从GPU复制到CPU
-    std::vector<float> outputData(m_outputSizeElements);
-    cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize, 
-                   cudaMemcpyDeviceToHost, m_stream);
-    cudaStreamSynchronize(m_stream);
-    
-    // 计算缩放因子
-    float xScale = static_cast<float>(imgWidth) / m_inputWidth;
-    float yScale = static_cast<float>(imgHeight) / m_inputHeight;
-    
-    // 假设输出格式为 [8400, 84] 或 [1, 8400, 84]
-    // 需要根据实际模型输出调整
-    int numProposals = m_outputSizeElements / 84; // 假设84个特征（4 bbox + 80 classes）
-    if (numProposals > 10000) numProposals = 10000; // 限制最大proposals数
-    
-    // 并行处理所有proposals，充分利用CPU多核
-    std::vector<Detection> tempDetections;
-    tempDetections.reserve(numProposals); // 预分配内存
-    
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 100)
-    #endif
-    for (int i = 0; i < numProposals; ++i) {
-        float* data = outputData.data() + i * 84;
-        
-        // 获取bbox坐标 (归一化)
-        float centerX = data[0];
-        float centerY = data[1];
-        float width = data[2];
-        float height = data[3];
-        
-        // 转换为像素坐标
-        centerX *= m_inputWidth;
-        centerY *= m_inputHeight;
-        width *= m_inputWidth;
-        height *= m_inputHeight;
-        
-        // 转换为左上角和右下角坐标
-        int x1 = static_cast<int>((centerX - width / 2) * xScale);
-        int y1 = static_cast<int>((centerY - height / 2) * yScale);
-        int x2 = static_cast<int>((centerX + width / 2) * xScale);
-        int y2 = static_cast<int>((centerY + height / 2) * yScale);
-        
-        // 限制在图像范围内
-        x1 = std::max(0, std::min(x1, imgWidth - 1));
-        y1 = std::max(0, std::min(y1, imgHeight - 1));
-        x2 = std::max(0, std::min(x2, imgWidth - 1));
-        y2 = std::max(0, std::min(y2, imgHeight - 1));
-        
-        // 找到置信度最高的类别
-        int bestClassId = 0;
-        float bestConf = data[4];
-        
-        for (int c = 1; c < 10; ++c) { // 假设10个类别
-            if (4 + c >= 84) break;
-            float conf = data[4 + c];
-            if (conf > bestConf) {
-                bestConf = conf;
-                bestClassId = c;
-            }
-        }
-        
-        // 检查置信度阈值
-        if (bestConf < confThreshold) {
-            continue;
-        }
-        
-        // 创建检测结果
-        Detection det;
-        det.x1 = x1;
-        det.y1 = y1;
-        det.x2 = x2;
-        det.y2 = y2;
-        det.confidence = bestConf;
-        det.classId = bestClassId;
-        det.className = getClassName(bestClassId);
-        
-        // 使用临时存储，后续再合并（避免锁竞争）
-        #ifdef _OPENMP
-        #pragma omp critical
-        #endif
-        {
-            tempDetections.push_back(det);
-        }
-    }
-    
-    // 合并结果
-    detections = std::move(tempDetections);
-    
-    return detections;
+    int imgWidth, 
+    int imgHeight, 
+    float confThreshold) {
+std::vector<Detection> detections;
+
+// ==========================================
+// 步骤 1: 获取数据并计算还原参数
+// ==========================================
+std::vector<float> outputData(m_outputSizeElements);
+cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize, 
+cudaMemcpyDeviceToHost, m_stream);
+cudaStreamSynchronize(m_stream);
+
+// 定义模型输出维度 (根据之前的日志确认是 8400 个锚点)
+int numClasses = 10; 
+int numAnchors = 8400; 
+
+// 必须与 preprocessImage 中的逻辑完全一致
+float scale = std::min((float)m_inputWidth / imgWidth, (float)m_inputHeight / imgHeight);
+int newUnpadW = (int)(imgWidth * scale);
+int newUnpadH = (int)(imgHeight * scale);
+int dw = (m_inputWidth - newUnpadW) / 2;
+int dh = (m_inputHeight - newUnpadH) / 2;
+
+std::vector<Detection> tempDetections;
+tempDetections.reserve(numAnchors);
+
+// ==========================================
+// 步骤 2: 解析所有预测框
+// ==========================================
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 100)
+#endif
+for (int i = 0; i < numAnchors; ++i) {
+// 寻找该锚点的最高置信度类别
+// outputData layout: [channels, anchors]
+// channels 0-3: bbox, 4-13: class scores
+int bestClassId = -1;
+float bestConf = -1.0f;
+
+for (int c = 0; c < numClasses; ++c) {
+float conf = outputData[(4 + c) * numAnchors + i];
+if (conf > bestConf) {
+bestConf = conf;
+bestClassId = c;
 }
+}
+
+if (bestConf < confThreshold) {
+continue;
+}
+
+// 获取并还原坐标
+float cx = outputData[0 * numAnchors + i];
+float cy = outputData[1 * numAnchors + i];
+float w  = outputData[2 * numAnchors + i];
+float h  = outputData[3 * numAnchors + i];
+
+// --- 核心修改：反向映射坐标 (Remove Padding & Scale) ---
+cx = (cx - dw) / scale;
+cy = (cy - dh) / scale;
+w  = w / scale;
+h  = h / scale;
+
+// 转为左上角坐标
+int x1 = static_cast<int>(cx - w / 2);
+int y1 = static_cast<int>(cy - h / 2);
+int x2 = static_cast<int>(cx + w / 2);
+int y2 = static_cast<int>(cy + h / 2);
+
+// 边界限制
+x1 = std::max(0, std::min(x1, imgWidth - 1));
+y1 = std::max(0, std::min(y1, imgHeight - 1));
+x2 = std::max(0, std::min(x2, imgWidth - 1));
+y2 = std::max(0, std::min(y2, imgHeight - 1));
+
+Detection det;
+det.x1 = x1;
+det.y1 = y1;
+det.x2 = x2;
+det.y2 = y2;
+det.confidence = bestConf;
+det.classId = bestClassId;
+det.className = getClassName(bestClassId);
+
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+{
+tempDetections.push_back(det);
+}
+}
+
+// ==========================================
+// 步骤 3: NMS (非极大值抑制)
+// ==========================================
+// 先按置信度排序
+std::sort(tempDetections.begin(), tempDetections.end(), 
+[](const Detection& a, const Detection& b) {
+return a.confidence > b.confidence;
+});
+
+std::vector<bool> isSuppressed(tempDetections.size(), false);
+float nmsThreshold = 0.45f; // NMS 阈值
+
+for (size_t i = 0; i < tempDetections.size(); ++i) {
+if (isSuppressed[i]) continue;
+detections.push_back(tempDetections[i]);
+
+for (size_t j = i + 1; j < tempDetections.size(); ++j) {
+if (isSuppressed[j]) continue;
+
+// 计算 IoU
+int xx1 = std::max(tempDetections[i].x1, tempDetections[j].x1);
+int yy1 = std::max(tempDetections[i].y1, tempDetections[j].y1);
+int xx2 = std::min(tempDetections[i].x2, tempDetections[j].x2);
+int yy2 = std::min(tempDetections[i].y2, tempDetections[j].y2);
+
+int w_inter = std::max(0, xx2 - xx1);
+int h_inter = std::max(0, yy2 - yy1);
+int interArea = w_inter * h_inter;
+
+int area1 = (tempDetections[i].x2 - tempDetections[i].x1) * (tempDetections[i].y2 - tempDetections[i].y1);
+int area2 = (tempDetections[j].x2 - tempDetections[j].x1) * (tempDetections[j].y2 - tempDetections[j].y1);
+
+float iou = static_cast<float>(interArea) / (area1 + area2 - interArea + 1e-6);
+
+if (iou > nmsThreshold) {
+isSuppressed[j] = true;
+}
+}
+}
+
+return detections;
+}
+
+
+
 
 std::vector<Detection> YOLODetectorTensorRT::detect(const cv::Mat& frame, float confThreshold) {
     std::vector<Detection> detections;
@@ -523,13 +585,9 @@ std::string YOLODetectorTensorRT::getClassName(int classId) const {
 }
 
 int YOLODetectorTensorRT::adjustClassId(int classId) const {
-    if (classId <= 4) {
-        return classId + 5;
-    } else if (classId <= 9) {
-        return classId - 5;
-    } else {
+
         return classId;
-    }
+
 }
 
 void YOLODetectorTensorRT::warmup(int iterations) {
