@@ -1,24 +1,389 @@
-void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream) {
-    // 1. 暴力缩放 (Direct Resize) - 不加黑边，直接拉伸到 640x640
-    cv::Mat resized;
-    cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
-    
-    // 2. 颜色转换 (BGR -> RGB) - 修复颜色识别错误
-    cv::Mat rgb;
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+$ make -j$(nproc)
+Scanning dependencies of target RM_Auto_Attack
+[  9%] Building CXX object CMakeFiles/RM_Auto_Attack.dir/src/detection/yolo_detector_tensorrt.cpp.o
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘void rm_auto_attack::YOLODetectorTensorRT::cleanup()’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:53:28: warning: ‘void nvinfer1::IExecutionContext::destroy()’ is deprecated [-Wdeprecated-declarations]
+   53 |         m_context->destroy();
+      |                            ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:2371:25: note: declared here
+ 2371 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:57:27: warning: ‘void nvinfer1::ICudaEngine::destroy()’ is deprecated [-Wdeprecated-declarations]
+   57 |         m_engine->destroy();
+      |                           ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1609:25: note: declared here
+ 1609 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:61:28: warning: ‘void nvinfer1::IRuntime::destroy()’ is deprecated [-Wdeprecated-declarations]
+   61 |         m_runtime->destroy();
+      |                            ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:682:25: note: declared here
+  682 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘bool rm_auto_attack::YOLODetectorTensorRT::buildEngineFromONNX(const string&, const string&, bool)’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:153:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  153 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:161:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  161 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:162:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  162 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:170:25: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  170 |         parser->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:171:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  171 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:172:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  172 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:180:25: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  180 |         parser->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:181:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  181 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:182:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  182 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:187:40: warning: ‘void nvinfer1::IBuilderConfig::setMaxWorkspaceSize(std::size_t)’ is deprecated [-Wdeprecated-declarations]
+  187 |     config->setMaxWorkspaceSize(1 << 30); // 1GB
+      |                                        ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:8747:25: note: declared here
+ 8747 |     TRT_DEPRECATED void setMaxWorkspaceSize(std::size_t workspaceSize) noexcept
+      |                         ^~~~~~~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:197:85: warning: ‘nvinfer1::ICudaEngine* nvinfer1::IBuilder::buildEngineWithConfig(nvinfer1::INetworkDefinition&, nvinfer1::IBuilderConfig&)’ is deprecated [-Wdeprecated-declarations]
+  197 | ne* engine = builder->buildEngineWithConfig(*network, *config);
+      |                                                              ^
 
-    // 3. 归一化 (0-255 -> 0.0-1.0)
-    cv::Mat normalized;
-    rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9483:43: note: declared here
+ 9483 |     TRT_DEPRECATED nvinfer1::ICudaEngine* buildEngineWithConfig(
+      |                                           ^~~~~~~~~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:200:25: warning: ‘void nvinfer1::IBuilderConfig::destroy()’ is deprecated [-Wdeprecated-declarations]
+  200 |         config->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:8950:25: note: declared here
+ 8950 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:201:25: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  201 |         parser->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:202:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  202 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:203:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  203 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:211:25: warning: ‘void nvinfer1::ICudaEngine::destroy()’ is deprecated [-Wdeprecated-declarations]
+  211 |         engine->destroy();
+      |                         ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1609:25: note: declared here
+ 1609 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:212:25: warning: ‘void nvinfer1::IBuilderConfig::destroy()’ is deprecated [-Wdeprecated-declarations]
+  212 |         config->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:8950:25: note: declared here
+ 8950 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:213:25: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  213 |         parser->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:214:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  214 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:215:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  215 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:223:35: warning: ‘void nvinfer1::IHostMemory::destroy()’ is deprecated [-Wdeprecated-declarations]
+  223 |         serializedEngine->destroy();
+      |                                   ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:172:25: note: declared here
+  172 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:224:25: warning: ‘void nvinfer1::ICudaEngine::destroy()’ is deprecated [-Wdeprecated-declarations]
+  224 |         engine->destroy();
+      |                         ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1609:25: note: declared here
+ 1609 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:225:25: warning: ‘void nvinfer1::IBuilderConfig::destroy()’ is deprecated [-Wdeprecated-declarations]
+  225 |         config->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:8950:25: note: declared here
+ 8950 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:226:25: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  226 |         parser->destroy();
+      |                         ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:227:26: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  227 |         network->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:228:26: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  228 |         builder->destroy();
+      |                          ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:239:31: warning: ‘void nvinfer1::IHostMemory::destroy()’ is deprecated [-Wdeprecated-declarations]
+  239 |     serializedEngine->destroy();
+      |                               ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:172:25: note: declared here
+  172 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:240:21: warning: ‘void nvinfer1::ICudaEngine::destroy()’ is deprecated [-Wdeprecated-declarations]
+  240 |     engine->destroy();
+      |                     ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1609:25: note: declared here
+ 1609 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:241:21: warning: ‘void nvinfer1::IBuilderConfig::destroy()’ is deprecated [-Wdeprecated-declarations]
+  241 |     config->destroy();
+      |                     ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:8950:25: note: declared here
+ 8950 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:242:21: warning: ‘virtual void nvonnxparser::IParser::destroy()’ is deprecated [-Wdeprecated-declarations]
+  242 |     parser->destroy();
+      |                     ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:8,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvOnnxParser.h:199:33: note: declared here
+  199 |     TRT_DEPRECATED virtual void destroy() = 0;
+      |                                 ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:243:22: warning: ‘void nvinfer1::INetworkDefinition::destroy()’ is deprecated [-Wdeprecated-declarations]
+  243 |     network->destroy();
+      |                      ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:7015:25: note: declared here
+ 7015 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:244:22: warning: ‘void nvinfer1::IBuilder::destroy()’ is deprecated [-Wdeprecated-declarations]
+  244 |     builder->destroy();
+      |                      ^
+In file included from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInfer.h:9422:25: note: declared here
+ 9422 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘bool rm_auto_attack::YOLODetectorTensorRT::loadEngine(const string&)’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:275:87: warning: ‘nvinfer1::ICudaEngine* nvinfer1::IRuntime::deserializeCudaEngine(const void*, std::size_t, nvinfer1::IPluginFactory*)’ is deprecated [-Wdeprecated-declarations]
+  275 | >deserializeCudaEngine(engineData.data(), engineSize, nullptr);
+      |                                                              ^
 
-    // 4. HWC -> CHW (通道分离)
-    std::vector<cv::Mat> channels(3);
-    cv::split(normalized, channels);
-
-    int channelSize = m_inputWidth * m_inputHeight * sizeof(float);
-
-    // 拷贝到 GPU (R, G, B 顺序)
-    cudaMemcpyAsync(gpu_Input, channels[0].data, channelSize, cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(gpu_Input + m_inputWidth * m_inputHeight, channels[1].data, channelSize, cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(gpu_Input + 2 * m_inputWidth * m_inputHeight, channels[2].data, channelSize, cudaMemcpyHostToDevice, stream);
-}
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:637:43: note: declared here
+  637 |     TRT_DEPRECATED nvinfer1::ICudaEngine* deserializeCudaEngine(
+      |                                           ^~~~~~~~~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:278:28: warning: ‘void nvinfer1::IRuntime::destroy()’ is deprecated [-Wdeprecated-declarations]
+  278 |         m_runtime->destroy();
+      |                            ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:682:25: note: declared here
+  682 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:287:27: warning: ‘void nvinfer1::ICudaEngine::destroy()’ is deprecated [-Wdeprecated-declarations]
+  287 |         m_engine->destroy();
+      |                           ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1609:25: note: declared here
+ 1609 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:289:28: warning: ‘void nvinfer1::IRuntime::destroy()’ is deprecated [-Wdeprecated-declarations]
+  289 |         m_runtime->destroy();
+      |                            ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:682:25: note: declared here
+  682 |     TRT_DEPRECATED void destroy() noexcept
+      |                         ^~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘bool rm_auto_attack::YOLODetectorTensorRT::allocateBuffers()’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:300:47: warning: ‘int32_t nvinfer1::ICudaEngine::getNbBindings() const’ is deprecated [-Wdeprecated-declarations]
+  300 |     int numBindings = m_engine->getNbBindings();
+      |                                               ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1399:28: note: declared here
+ 1399 |     TRT_DEPRECATED int32_t getNbBindings() const noexcept
+      |                            ^~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:308:63: warning: ‘nvinfer1::Dims nvinfer1::ICudaEngine::getBindingDimensions(int32_t) const’ is deprecated [-Wdeprecated-declarations]
+  308 |         nvinfer1::Dims dims = m_engine->getBindingDimensions(i);
+      |                                                               ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1492:25: note: declared here
+ 1492 |     TRT_DEPRECATED Dims getBindingDimensions(int32_t bindingIndex) const noexcept
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:318:39: warning: ‘bool nvinfer1::ICudaEngine::bindingIsInput(int32_t) const’ is deprecated [-Wdeprecated-declarations]
+  318 |         if (m_engine->bindingIsInput(i)) {
+      |                                       ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:1465:25: note: declared here
+ 1465 |     TRT_DEPRECATED bool bindingIsInput(int32_t bindingIndex) const noexcept
+      |                         ^~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: At global scope:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:333:6: error: no declaration matches ‘void rm_auto_attack::YOLODetectorTensorRT::preprocessImage(const cv::Mat&, float*, CUstream_st* const&)’
+  333 | void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream) {
+      |      ^~~~~~~~~~~~~~~~~~~~
+In file included from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:81:10: note: candidate is: ‘void rm_auto_attack::YOLODetectorTensorRT::preprocessImage(const cv::Mat&, float*)’
+   81 |     void preprocessImage(const cv::Mat& image, float* gpuInput);
+      |          ^~~~~~~~~~~~~~~
+/home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:28:7: note: ‘class rm_auto_attack::YOLODetectorTensorRT’ defined here
+   28 | class YOLODetectorTensorRT {
+      |       ^~~~~~~~~~~~~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘std::vector<rm_auto_attack::Detection> rm_auto_attack::YOLODetectorTensorRT::detect(const cv::Mat&, float)’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:511:72: warning: ‘bool nvinfer1::IExecutionContext::enqueueV2(void* const*, cudaStream_t, CUevent_st**)’ is deprecated [-Wdeprecated-declarations]
+  511 |         bool success = m_context->enqueueV2(bindings, m_stream, nullptr);
+      |                                                                        ^
+In file included from /usr/include/aarch64-linux-gnu/NvInfer.h:17,
+                 from /home/li/Desktop/C++/include/detection/yolo_detector_tensorrt.h:7,
+                 from /home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:1:
+/usr/include/aarch64-linux-gnu/NvInferRuntime.h:2814:25: note: declared here
+ 2814 |     TRT_DEPRECATED bool enqueueV2(void* const* bindings, cudaStream_t stream, cudaEvent_t* inputConsumed) noexcept
+      |                         ^~~~~~~~~
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp: In member function ‘std::string rm_auto_attack::YOLODetectorTensorRT::getClassName(int) const’:
+/home/li/Desktop/C++/src/detection/yolo_detector_tensorrt.cpp:537:52: warning: unused parameter ‘classId’ [-Wunused-parameter]
+  537 | std::string YOLODetectorTensorRT::getClassName(int classId) const {
+      |                                                ~~~~^~~~~~~
+make[2]: *** [CMakeFiles/RM_Auto_Attack.dir/build.make:180：CMakeFiles/RM_Auto_Attack.dir/src/detection/yolo_detector_tensorrt.cpp.o] 错误 1
+make[1]: *** [CMakeFiles/Makefile2:76：CMakeFiles/RM_Auto_Attack.dir/all] 错误 2
+make: *** [Makefile:130：all] 错误 2
+(base) li@ubuntu:~/Desktop/C++/build$ 
