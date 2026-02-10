@@ -330,64 +330,25 @@ bool YOLODetectorTensorRT::allocateBuffers() {
     return true;
 }
 
-void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpuInput) {
-    if (image.empty()) return;
+void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream) {
+  cv::Mat resized;
+  cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
+  
+  cv::Mat rgb;
+  cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
 
-    // ==========================================
-    // 步骤 1: 计算 Letterbox 缩放比例和偏移量
-    // ==========================================
-    float scale = std::min((float)m_inputWidth / image.cols, (float)m_inputHeight / image.rows);
-    int newUnpadW = (int)(image.cols * scale);
-    int newUnpadH = (int)(image.rows * scale);
-    
-    // 计算黑边偏移量（让图像居中）
-    int dw = (m_inputWidth - newUnpadW) / 2;
-    int dh = (m_inputHeight - newUnpadH) / 2;
+  cv::Mat normalized;
+  rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
 
-    // ==========================================
-    // 步骤 2: 图像缩放与填充
-    // ==========================================
-    cv::Mat resized;
-    if (image.cols != newUnpadW || image.rows != newUnpadH) {
-        cv::resize(image, resized, cv::Size(newUnpadW, newUnpadH));
-    } else {
-        resized = image;
-    }
+  std::vector<cv::Mat> channels(3);
+  cv::split(normalized, channels);
 
-    // 创建全黑画布 (640x640)
-    cv::Mat letterboxed = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
-    
-    // 将缩放后的图拷贝到画布中心
-    resized.copyTo(letterboxed(cv::Rect(dw, dh, newUnpadW, newUnpadH)));
+  int channelSize = m_inputWidth * m_inputHeight * sizeof(float);
 
-    // ==========================================
-    // 步骤 3: 预处理 (BGR->RGB, 归一化, HWC->CHW)
-    // ==========================================
-    cv::Mat rgb;
-    cv::cvtColor(letterboxed, rgb, cv::COLOR_BGR2RGB);
-    
-    // 归一化 0~255 -> 0.0~1.0
-    rgb.convertTo(rgb, CV_32F, 1.0);
-
-    // 拷贝到 GPU 输入缓冲区 (并行加速)
-    std::vector<float> inputData(m_inputWidth * m_inputHeight * 3);
-    const int totalPixels = m_inputHeight * m_inputWidth;
-    
-    #ifdef _OPENMP
-    #pragma omp parallel for num_threads(3)
-    #endif
-    for (int c = 0; c < 3; ++c) {
-        float* channelData = inputData.data() + c * totalPixels;
-        for (int h = 0; h < m_inputHeight; ++h) {
-            for (int w = 0; w < m_inputWidth; ++w) {
-                // 指针访问比 at() 更快
-                const float* rowPtr = rgb.ptr<float>(h);
-                channelData[h * m_inputWidth + w] = rowPtr[w * 3 + c];
-            }
-        }
-    }
-    
-    cudaMemcpy(gpuInput, inputData.data(), m_inputSize, cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(gpu_Input, channels[0].data, channelSize, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(gpu_Input + m_inputWidth * m_inputHeight, channels[1].data, channelSize, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(gpu_Input + 2 * m_inputWidth * m_inputHeight, channels[2].data, channelSize, cudaMemcpyHostToDevice, stream);
+ 
 }
 
 std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput, 
@@ -406,9 +367,22 @@ cudaStreamSynchronize(m_stream);
 // 修改点：类别数量改为 1
 // 因为我们根据颜色加载了专门的模型，所以模型里只有“装甲板”这一类
 // ==========================================
-int numClasses = 1; 
+
 int numAnchors = 8400; 
 
+int numClasses = (m_outputSizeElements /numAnchors) - 4;
+
+static bool class_log_printed = false;
+if (!class_log_printed) {
+    LOG_INFO("DEBUG: 模型输出总元素: " + std::to_string(m_outputSizeElements));
+    LOG_INFO("DEBUG: 推断出的类别数: " + std::to_string(numClasses));
+    if (numClasses <= 0) {
+        LOG_ERROR("错误: 模型输出维度异常，无法解析!");
+    }
+    class_log_printed = true;
+}
+
+if (numClasses <= 0) numClasses = 1;
 // 计算缩放参数 (与 preprocessImage 保持一致)
 float scale = std::min((float)m_inputWidth / imgWidth, (float)m_inputHeight / imgHeight);
 int newUnpadW = (int)(imgWidth * scale);
@@ -449,11 +423,14 @@ if (bestConf < confThreshold) {
 continue;
 }
 
+float scale_x = (float)m_inputWidth / frame.cols;
+float scale_y = (float)m_inputHeight / frame.rows;
+
 // 解析坐标
-float cx = outputData[0 * numAnchors + i];
-float cy = outputData[1 * numAnchors + i];
-float w  = outputData[2 * numAnchors + i];
-float h  = outputData[3 * numAnchors + i];
+float cx = output[base_index + 0];
+float cy = output[base_index + 1];
+float w  = output[base_index + 2];
+float h  = output[base_index + 3];
 
 // 坐标反变换 (Map back to original image)
 cx = (cx - dw) / scale;
@@ -569,6 +546,45 @@ std::vector<Detection> YOLODetectorTensorRT::detect(const cv::Mat& frame, float 
         
         // 后处理（在CPU上并行处理，内部会同步GPU）
         detections = postprocessOutput(static_cast<float*>(m_outputBuffer), 
+                                      frame.cols, frame.rows, confThreshold);
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR("检测过程中发生异常: " + std::string(e.what()));
+    }
+    
+    return detections;
+}
+
+void YOLODetectorTensorRT::setClassNames(const std::vector<std::string>& classNames) {
+    m_classNames = classNames;
+}
+
+std::string YOLODetectorTensorRT::getClassName(int classId) const {
+    return "armor";
+}
+
+int YOLODetectorTensorRT::adjustClassId(int classId) const {
+
+        return classId;
+
+}
+
+void YOLODetectorTensorRT::warmup(int iterations) {
+    if (!m_modelLoaded) return;
+    
+    // 移除预热日志
+    cv::Mat dummy = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
+    
+    for (int i = 0; i < iterations; ++i) {
+        detect(dummy, 0.3f);
+    }
+    
+    // 移除预热完成日志
+}
+
+} // namespace rm_auto_attack
+
+oat*>(m_outputBuffer), 
                                       frame.cols, frame.rows, confThreshold);
         
     } catch (const std::exception& e) {
