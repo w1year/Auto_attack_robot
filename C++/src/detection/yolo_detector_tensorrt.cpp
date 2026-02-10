@@ -559,30 +559,3 @@ void YOLODetectorTensorRT::warmup(int iterations) {
 
 } // namespace rm_auto_attack
 
-warmup(int iterations) {
-    if (!m_modelLoaded) return;
-    
-    // 移除预热日志
-    cv::Mat dummy = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
-    
-    for (int i = 0; i < iterations; ++i) {
-        detect(dummy, 0.3f);
-    }
-    
-    // 移除预热完成日志
-}
-
-} // namespace rm_auto_attack
-
-除预热日志
-    cv::Mat dummy = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
-    
-    for (int i = 0; i < iterations; ++i) {
-        detect(dummy, 0.3f);
-    }
-    
-    // 移除预热完成日志
-}
-
-} // namespace rm_auto_attack
-
