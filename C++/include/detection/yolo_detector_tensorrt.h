@@ -78,7 +78,7 @@ private:
     bool buildEngineFromONNX(const std::string& onnxPath, const std::string& enginePath, bool useFP16);
     bool loadEngine(const std::string& enginePath);
     bool allocateBuffers();
-    void preprocessImage(const cv::Mat& image, float* gpuInput);
+    void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream);
     std::vector<Detection> postprocessOutput(float* gpuOutput, int imgWidth, int imgHeight, float confThreshold);
     int adjustClassId(int classId) const;
     

@@ -331,184 +331,159 @@ bool YOLODetectorTensorRT::allocateBuffers() {
 }
 
 void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream) {
-  cv::Mat resized;
-  cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
-  
-  cv::Mat rgb;
-  cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+    // 1. 暴力缩放 (Direct Resize) - 不加黑边，直接拉伸到 640x640
+    cv::Mat resized;
+    cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
+    
+    // 2. 颜色转换 (BGR -> RGB) - 修复颜色识别错误
+    cv::Mat rgb;
+    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
 
-  cv::Mat normalized;
-  rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
+    // 3. 归一化 (0-255 -> 0.0-1.0)
+    cv::Mat normalized;
+    rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
 
-  std::vector<cv::Mat> channels(3);
-  cv::split(normalized, channels);
+    // 4. HWC -> CHW (通道分离)
+    std::vector<cv::Mat> channels(3);
+    cv::split(normalized, channels);
 
-  int channelSize = m_inputWidth * m_inputHeight * sizeof(float);
+    int channelSize = m_inputWidth * m_inputHeight * sizeof(float);
 
-  cudaMemcpyAsync(gpu_Input, channels[0].data, channelSize, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(gpu_Input + m_inputWidth * m_inputHeight, channels[1].data, channelSize, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(gpu_Input + 2 * m_inputWidth * m_inputHeight, channels[2].data, channelSize, cudaMemcpyHostToDevice, stream);
- 
+    // 拷贝到 GPU (R, G, B 顺序)
+    cudaMemcpyAsync(gpu_Input, channels[0].data, channelSize, cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(gpu_Input + m_inputWidth * m_inputHeight, channels[1].data, channelSize, cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(gpu_Input + 2 * m_inputWidth * m_inputHeight, channels[2].data, channelSize, cudaMemcpyHostToDevice, stream);
 }
 
-std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput, 
-    int imgWidth, 
-    int imgHeight, 
-    float confThreshold) {
-std::vector<Detection> detections;
+std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput, int imgWidth, int imgHeight, float confThreshold) {
+    std::vector<Detection> detections;
 
-// 1. 将数据从 GPU 拷贝到 CPU
-std::vector<float> outputData(m_outputSizeElements);
-cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize, 
-cudaMemcpyDeviceToHost, m_stream);
-cudaStreamSynchronize(m_stream);
+    // 1. 将数据从 GPU 拷贝到 CPU
+    std::vector<float> outputData(m_outputSizeElements);
+    cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize, cudaMemcpyDeviceToHost, m_stream);
+    cudaStreamSynchronize(m_stream);
 
-// ==========================================
-// 修改点：类别数量改为 1
-// 因为我们根据颜色加载了专门的模型，所以模型里只有“装甲板”这一类
-// ==========================================
+    // 2. 自动推断类别数 (Total = (4 + nc) * 8400)
+    int numAnchors = 8400; 
+    int numClasses = (m_outputSizeElements / numAnchors) - 4;
+    if (numClasses <= 0) numClasses = 1; // 默认防崩
 
-int numAnchors = 8400; 
+    // 3. 准备直接缩放的比例 (Direct Resize Scale)
+    // 既然预处理是暴力拉伸，这里直接按长宽比还原，不再计算 padding
+    float scale_x = (float)imgWidth / m_inputWidth;
+    float scale_y = (float)imgHeight / m_inputHeight;
 
-int numClasses = (m_outputSizeElements /numAnchors) - 4;
+    std::vector<Detection> tempDetections;
+    tempDetections.reserve(numAnchors);
 
-static bool class_log_printed = false;
-if (!class_log_printed) {
-    LOG_INFO("DEBUG: 模型输出总元素: " + std::to_string(m_outputSizeElements));
-    LOG_INFO("DEBUG: 推断出的类别数: " + std::to_string(numClasses));
-    if (numClasses <= 0) {
-        LOG_ERROR("错误: 模型输出维度异常，无法解析!");
+    float max_conf_debug = 0.0f; // 调试用
+
+    // 4. 解析预测框 (YOLOv8 格式: [4+nc, 8400])
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 100)
+    #endif
+    for (int i = 0; i < numAnchors; ++i) {
+        int bestClassId = -1;
+        float bestConf = -1.0f;
+
+        // 寻找该 Anchor 的最高置信度类别
+        // 内存布局: [class0_row, class1_row, ...]
+        for (int c = 0; c < numClasses; ++c) {
+            // 类别概率从第 4 行开始 (0,1,2,3 是坐标)
+            float conf = outputData[(4 + c) * numAnchors + i];
+            if (conf > bestConf) {
+                bestConf = conf;
+                bestClassId = c;
+            }
+        }
+
+        if (bestConf > max_conf_debug) max_conf_debug = bestConf;
+
+        // 阈值过滤
+        if (bestConf < confThreshold) continue;
+
+        // 读取坐标 (cx, cy, w, h)
+        // 0: cx, 1: cy, 2: w, 3: h
+        float cx = outputData[0 * numAnchors + i];
+        float cy = outputData[1 * numAnchors + i];
+        float w  = outputData[2 * numAnchors + i];
+        float h  = outputData[3 * numAnchors + i];
+
+        // 坐标还原 (直接乘缩放比例)
+        float x_center = cx * scale_x;
+        float y_center = cy * scale_y;
+        float width    = w  * scale_x;
+        float height   = h  * scale_y;
+
+        // 转为左上角坐标 (x1, y1, x2, y2)
+        int x1 = static_cast<int>(x_center - width * 0.5f);
+        int y1 = static_cast<int>(y_center - height * 0.5f);
+        int x2 = static_cast<int>(x_center + width * 0.5f);
+        int y2 = static_cast<int>(y_center + height * 0.5f);
+
+        // 边界限制
+        x1 = std::max(0, std::min(x1, imgWidth - 1));
+        y1 = std::max(0, std::min(y1, imgHeight - 1));
+        x2 = std::max(0, std::min(x2, imgWidth - 1));
+        y2 = std::max(0, std::min(y2, imgHeight - 1));
+
+        Detection det;
+        det.x1 = x1; det.y1 = y1; det.x2 = x2; det.y2 = y2;
+        det.confidence = bestConf;
+        det.classId = bestClassId;
+        det.className = getClassName(bestClassId);
+
+        #ifdef _OPENMP
+        #pragma omp critical
+        #endif
+        {
+            tempDetections.push_back(det);
+        }
     }
-    class_log_printed = true;
-}
 
-if (numClasses <= 0) numClasses = 1;
-// 计算缩放参数 (与 preprocessImage 保持一致)
-float scale = std::min((float)m_inputWidth / imgWidth, (float)m_inputHeight / imgHeight);
-int newUnpadW = (int)(imgWidth * scale);
-int newUnpadH = (int)(imgHeight * scale);
-int dw = (m_inputWidth - newUnpadW) / 2;
-int dh = (m_inputHeight - newUnpadH) / 2;
+    // 调试日志
+    static int log_counter = 0;
+    if (log_counter++ % 60 == 0) {
+        // LOG_INFO("DEBUG: 最高置信度: " + std::to_string(max_conf_debug));
+    }
 
-std::vector<Detection> tempDetections;
-tempDetections.reserve(numAnchors);
+    // 5. NMS (非极大值抑制)
+    std::sort(tempDetections.begin(), tempDetections.end(), [](const Detection& a, const Detection& b) {
+        return a.confidence > b.confidence;
+    });
 
-// 用于调试：记录全图最高置信度
-float max_conf_debug = 0.0f;
+    std::vector<bool> isSuppressed(tempDetections.size(), false);
+    float nmsThreshold = 0.45f;
 
-// 2. 解析预测框
-#ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic, 100)
-#endif
-for (int i = 0; i < numAnchors; ++i) {
-int bestClassId = -1;
-float bestConf = -1.0f;
+    for (size_t i = 0; i < tempDetections.size(); ++i) {
+        if (isSuppressed[i]) continue;
+        detections.push_back(tempDetections[i]);
 
-// 寻找该锚点的最高置信度类别
-for (int c = 0; c < numClasses; ++c) {
-float conf = outputData[(4 + c) * numAnchors + i];
-if (conf > bestConf) {
-bestConf = conf;
-bestClassId = c;
-}
-}
+        for (size_t j = i + 1; j < tempDetections.size(); ++j) {
+            if (isSuppressed[j]) continue;
 
-// 记录最高分用于调试
-if (bestConf > max_conf_debug) {
-max_conf_debug = bestConf;
-}
+            // 计算 IOU
+            int xx1 = std::max(tempDetections[i].x1, tempDetections[j].x1);
+            int yy1 = std::max(tempDetections[i].y1, tempDetections[j].y1);
+            int xx2 = std::min(tempDetections[i].x2, tempDetections[j].x2);
+            int yy2 = std::min(tempDetections[i].y2, tempDetections[j].y2);
 
-// 阈值过滤
-if (bestConf < confThreshold) {
-continue;
-}
+            int w_inter = std::max(0, xx2 - xx1);
+            int h_inter = std::max(0, yy2 - yy1);
+            int interArea = w_inter * h_inter;
 
-float scale_x = (float)m_inputWidth / frame.cols;
-float scale_y = (float)m_inputHeight / frame.rows;
+            int area1 = (tempDetections[i].x2 - tempDetections[i].x1) * (tempDetections[i].y2 - tempDetections[i].y1);
+            int area2 = (tempDetections[j].x2 - tempDetections[j].x1) * (tempDetections[j].y2 - tempDetections[j].y1);
 
-// 解析坐标
-float cx = output[base_index + 0];
-float cy = output[base_index + 1];
-float w  = output[base_index + 2];
-float h  = output[base_index + 3];
+            float iou = static_cast<float>(interArea) / (area1 + area2 - interArea + 1e-6);
 
-// 坐标反变换 (Map back to original image)
-cx = (cx - dw) / scale;
-cy = (cy - dh) / scale;
-w  = w / scale;
-h  = h / scale;
+            if (iou > nmsThreshold) {
+                isSuppressed[j] = true;
+            }
+        }
+    }
 
-int x1 = static_cast<int>(cx - w / 2);
-int y1 = static_cast<int>(cy - h / 2);
-int x2 = static_cast<int>(cx + w / 2);
-int y2 = static_cast<int>(cy + h / 2);
-
-// 边界限制
-x1 = std::max(0, std::min(x1, imgWidth - 1));
-y1 = std::max(0, std::min(y1, imgHeight - 1));
-x2 = std::max(0, std::min(x2, imgWidth - 1));
-y2 = std::max(0, std::min(y2, imgHeight - 1));
-
-Detection det;
-det.x1 = x1;
-det.y1 = y1;
-det.x2 = x2;
-det.y2 = y2;
-det.confidence = bestConf;
-det.classId = bestClassId;
-det.className = getClassName(bestClassId);
-
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-{
-tempDetections.push_back(det);
-}
-}
-
-// 每60帧打印一次最高置信度
-static int log_counter = 0;
-if (log_counter++ % 60 == 0) {
-LOG_INFO("DEBUG: 当前帧全图最高置信度 = " + std::to_string(max_conf_debug));
-}
-
-// 3. NMS (非极大值抑制)
-std::sort(tempDetections.begin(), tempDetections.end(), 
-[](const Detection& a, const Detection& b) {
-return a.confidence > b.confidence;
-});
-
-std::vector<bool> isSuppressed(tempDetections.size(), false);
-float nmsThreshold = 0.45f;
-
-for (size_t i = 0; i < tempDetections.size(); ++i) {
-if (isSuppressed[i]) continue;
-detections.push_back(tempDetections[i]);
-
-for (size_t j = i + 1; j < tempDetections.size(); ++j) {
-if (isSuppressed[j]) continue;
-
-int xx1 = std::max(tempDetections[i].x1, tempDetections[j].x1);
-int yy1 = std::max(tempDetections[i].y1, tempDetections[j].y1);
-int xx2 = std::min(tempDetections[i].x2, tempDetections[j].x2);
-int yy2 = std::min(tempDetections[i].y2, tempDetections[j].y2);
-
-int w_inter = std::max(0, xx2 - xx1);
-int h_inter = std::max(0, yy2 - yy1);
-int interArea = w_inter * h_inter;
-
-int area1 = (tempDetections[i].x2 - tempDetections[i].x1) * (tempDetections[i].y2 - tempDetections[i].y1);
-int area2 = (tempDetections[j].x2 - tempDetections[j].x1) * (tempDetections[j].y2 - tempDetections[j].y1);
-
-float iou = static_cast<float>(interArea) / (area1 + area2 - interArea + 1e-6);
-
-if (iou > nmsThreshold) {
-isSuppressed[j] = true;
-}
-}
-}
-
-return detections;
+    return detections;
 }
 
 
@@ -584,31 +559,7 @@ void YOLODetectorTensorRT::warmup(int iterations) {
 
 } // namespace rm_auto_attack
 
-oat*>(m_outputBuffer), 
-                                      frame.cols, frame.rows, confThreshold);
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR("检测过程中发生异常: " + std::string(e.what()));
-    }
-    
-    return detections;
-}
-
-void YOLODetectorTensorRT::setClassNames(const std::vector<std::string>& classNames) {
-    m_classNames = classNames;
-}
-
-std::string YOLODetectorTensorRT::getClassName(int classId) const {
-    return "armor";
-}
-
-int YOLODetectorTensorRT::adjustClassId(int classId) const {
-
-        return classId;
-
-}
-
-void YOLODetectorTensorRT::warmup(int iterations) {
+warmup(int iterations) {
     if (!m_modelLoaded) return;
     
     // 移除预热日志
