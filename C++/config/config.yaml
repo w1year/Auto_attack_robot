@@ -13,7 +13,7 @@ model:
   path: "best.onnx"  # YOLO模型路径 (需要将.pt模型转换为.onnx格式)
   input_width: 640
   input_height: 640
-  confidence_threshold: 0.3
+  confidence_threshold: 0.5
 
 # 类别名称
 classes:
