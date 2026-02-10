@@ -402,8 +402,11 @@ cudaMemcpyAsync(outputData.data(), gpuOutput, m_outputSize,
 cudaMemcpyDeviceToHost, m_stream);
 cudaStreamSynchronize(m_stream);
 
-// 模型参数
-int numClasses = 10; 
+// ==========================================
+// 修改点：类别数量改为 1
+// 因为我们根据颜色加载了专门的模型，所以模型里只有“装甲板”这一类
+// ==========================================
+int numClasses = 1; 
 int numAnchors = 8400; 
 
 // 计算缩放参数 (与 preprocessImage 保持一致)
@@ -420,15 +423,12 @@ tempDetections.reserve(numAnchors);
 float max_conf_debug = 0.0f;
 
 // 2. 解析预测框
-// 注意：如果有 OpenMP 报错，可以先把下面这行 #pragma 注释掉
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 100)
 #endif
 for (int i = 0; i < numAnchors; ++i) {
-// === 必须在这里定义这两个变量 ===
 int bestClassId = -1;
 float bestConf = -1.0f;
-// ============================
 
 // 寻找该锚点的最高置信度类别
 for (int c = 0; c < numClasses; ++c) {
@@ -439,7 +439,7 @@ bestClassId = c;
 }
 }
 
-// 记录最高分用于调试 (线程不安全但用于观察足够了)
+// 记录最高分用于调试
 if (bestConf > max_conf_debug) {
 max_conf_debug = bestConf;
 }
@@ -489,7 +489,7 @@ tempDetections.push_back(det);
 }
 }
 
-// 每60帧打印一次最高置信度，看看模型到底看到了什么
+// 每60帧打印一次最高置信度
 static int log_counter = 0;
 if (log_counter++ % 60 == 0) {
 LOG_INFO("DEBUG: 当前帧全图最高置信度 = " + std::to_string(max_conf_debug));
@@ -511,7 +511,6 @@ detections.push_back(tempDetections[i]);
 for (size_t j = i + 1; j < tempDetections.size(); ++j) {
 if (isSuppressed[j]) continue;
 
-// IoU 计算
 int xx1 = std::max(tempDetections[i].x1, tempDetections[j].x1);
 int yy1 = std::max(tempDetections[i].y1, tempDetections[j].y1);
 int xx2 = std::min(tempDetections[i].x2, tempDetections[j].x2);
@@ -584,11 +583,7 @@ void YOLODetectorTensorRT::setClassNames(const std::vector<std::string>& classNa
 }
 
 std::string YOLODetectorTensorRT::getClassName(int classId) const {
-    int adjustedId = adjustClassId(classId);
-    if (adjustedId >= 0 && adjustedId < static_cast<int>(m_classNames.size())) {
-        return m_classNames[adjustedId];
-    }
-    return "unknown_" + std::to_string(classId);
+    return "armor";
 }
 
 int YOLODetectorTensorRT::adjustClassId(int classId) const {
@@ -601,6 +596,18 @@ void YOLODetectorTensorRT::warmup(int iterations) {
     if (!m_modelLoaded) return;
     
     // 移除预热日志
+    cv::Mat dummy = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
+    
+    for (int i = 0; i < iterations; ++i) {
+        detect(dummy, 0.3f);
+    }
+    
+    // 移除预热完成日志
+}
+
+} // namespace rm_auto_attack
+
+除预热日志
     cv::Mat dummy = cv::Mat::zeros(m_inputHeight, m_inputWidth, CV_8UC3);
     
     for (int i = 0; i < iterations; ++i) {

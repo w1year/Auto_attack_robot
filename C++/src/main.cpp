@@ -162,6 +162,7 @@ void patrolThread(GimbalController* gimbal) {
 }
 
 // 检测线程
+// 检测线程 (完整版，保留所有绘制和控制逻辑)
 void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalController* gimbal) {
     // 设置线程优先级和名称（检测线程需要高优先级）
     ThreadOptimizer::setThreadName("DetectionThread");
@@ -215,7 +216,7 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
     double avgDetectTime = 0.0;
     
     // 性能测量统计（指数移动平均）
-    double avgFrameAcquireTime = 0.0;      // 获取帧时间（包含Bayer转换，在getFrame内部）
+    double avgFrameAcquireTime = 0.0;      // 获取帧时间
     double avgDisplayTime = 0.0;           // 显示时间
     double avgTotalFrameTime = 0.0;        // 总帧时间
     
@@ -238,119 +239,72 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             auto frameStartTime = std::chrono::steady_clock::now();
             auto nextFrameTime = lastFrameTime + targetFrameDuration;
             
-            // 如果当前时间还没到下一帧时间，等待（但要尽量短，提高利用率）
+            // 如果当前时间还没到下一帧时间，等待
             if (frameStartTime < nextFrameTime) {
                 auto waitTime = nextFrameTime - frameStartTime;
-                // 如果等待时间 > 1ms，使用精确等待；否则立即处理
                 if (waitTime > std::chrono::milliseconds(1)) {
                     std::this_thread::sleep_until(nextFrameTime);
                 }
             }
             lastFrameTime = std::chrono::steady_clock::now();
             
-            // 直接从相机获取BGR图像（相机会自动将Bayer转换为BGR）
+            // 直接从相机获取BGR图像
             cv::Mat frame;
             
             // 测量获取帧时间
             auto frameAcquireStart = std::chrono::steady_clock::now();
-            // 超时时间：如果是60fps需要16.67ms，如果是30fps需要33ms，使用40ms确保能获取到帧
             if (!camera->getFrame(frame, 40)) {
-                // 不等待，立即继续下一次循环（提高利用率）
                 continue;
             }
             auto frameAcquireTime = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - frameAcquireStart).count();
             
             if (frame.empty()) {
-                // 不等待，立即继续
                 continue;
             }
             
-            // 更新图像中心（从实际帧中获取，确保准确性）
+            // 更新图像中心
             imageCenterX = frame.cols / 2;
             
-            // 注意：Bayer转换在getFrame内部完成，时间已包含在frameAcquireTime中
-            // 如果需要单独测量，需要在camera->getFrame内部添加测量点
-            
-            // 验证图像格式（诊断用）
-            if (frame.type() != CV_8UC3 || frame.channels() != 3) {
-                LOG_ERROR("检测前图像格式错误: type=" + std::to_string(frame.type()) + 
-                         ", channels=" + std::to_string(frame.channels()) + 
-                         ", size=" + std::to_string(frame.cols) + "x" + std::to_string(frame.rows));
-                continue;
-            }
-            
-            // 执行检测（TensorRT推理 - GPU加速），使用BGR图像进行检测
+            // 执行检测（TensorRT推理）
             auto detectStart = std::chrono::steady_clock::now();
-            std::vector<Detection> allDetections = detector->detect(frame, 0.8f);
+            // 使用较高的阈值，因为模型是专用的
+            std::vector<Detection> allDetections = detector->detect(frame, 0.5f);
             auto detectTime = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - detectStart).count();
             
-            // 记录各项时间（指数移动平均）
+            // 记录各项时间
             avgFrameAcquireTime = avgFrameAcquireTime * 0.9 + frameAcquireTime * 0.1;
             avgDetectTime = avgDetectTime * 0.9 + detectTime * 0.1;
             
-            // 计算FPS（更精确的计算）
+            // 计算FPS
             frameCount++;
             auto fpsCheckTime = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 fpsCheckTime - lastFpsTime).count();
             
-            if (elapsed >= 100) {  // 每100ms更新一次FPS
+            if (elapsed >= 100) {
                 fps = (frameCount * 1000.0) / elapsed;
                 frameCount = 0;
                 lastFpsTime = fpsCheckTime;
             }
-            
-            // 绘制检测结果（使用frame直接绘制，避免clone开销）
-            cv::Mat resultFrame = frame;  // 使用引用，不复制
+            auto displayStart = std::chrono::steady_clock::now();
+            // 绘制检测结果
+            cv::Mat resultFrame = frame;
             std::string statusText = "Patrolling";
             std::string shootStatusText = "Standby";
             
-            // 过滤目标（并行优化：使用更高效的过滤）
-            std::vector<Detection> targetDetections;
-            targetDetections.reserve(allDetections.size());  // 预分配内存
-            
-            int targetStartId = (g_targetType == "red") ? 5 : 0;
-            int targetEndId = (g_targetType == "red") ? 9 : 4;
+            // === 修改点：不再过滤ID ===
+            // 因为加载了专用模型，所有检测到的结果都是目标
+            std::vector<Detection>& targetDetections = allDetections; 
             
             // 诊断：记录检测到的目标数量（每5秒输出一次）
             static auto lastDetectLogTime = std::chrono::steady_clock::now();
             auto detectLogTime = std::chrono::steady_clock::now();
             if (detectLogTime - lastDetectLogTime >= std::chrono::seconds(5)) {
-                // 统计各类别ID的数量
-                std::map<int, int> classIdCount;
-                for (const auto& det : allDetections) {
-                    classIdCount[det.classId]++;
-                }
-                
-                std::string classIdStats = "类别统计: ";
-                for (const auto& pair : classIdCount) {
-                    classIdStats += "ID" + std::to_string(pair.first) + "=" + std::to_string(pair.second) + " ";
-                }
-                
                 LOG_INFO("检测统计: 总检测数=" + std::to_string(allDetections.size()) + 
-                        ", 图像尺寸=" + std::to_string(frame.cols) + "x" + std::to_string(frame.rows) +
-                        ", 目标类型=" + g_targetType +
-                        ", 过滤范围=[" + std::to_string(targetStartId) + "-" + std::to_string(targetEndId) + "]");
-                LOG_INFO(classIdStats);
+                        ", 目标类型=" + g_targetType + " (无ID过滤)");
                 lastDetectLogTime = detectLogTime;
-            }
-            
-            std::copy_if(allDetections.begin(), allDetections.end(),
-                        std::back_inserter(targetDetections),
-                        [targetStartId, targetEndId](const Detection& det) {
-                            return det.classId >= targetStartId && det.classId <= targetEndId;
-                        });
-            
-            // 诊断：记录过滤后的目标数量（每5秒输出一次）
-            static auto lastFilterLogTime = std::chrono::steady_clock::now();
-            auto filterLogTime = std::chrono::steady_clock::now();
-            if (filterLogTime - lastFilterLogTime >= std::chrono::seconds(5)) {
-                LOG_INFO("过滤统计: 过滤前=" + std::to_string(allDetections.size()) + 
-                        ", 过滤后=" + std::to_string(targetDetections.size()) +
-                        ", 目标类型=" + g_targetType);
-                lastFilterLogTime = filterLogTime;
             }
             
             auto currentTime = std::chrono::steady_clock::now();
@@ -376,46 +330,32 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                 auto targetLogTime = std::chrono::steady_clock::now();
                 if (targetLogTime - lastTargetLogTime >= std::chrono::seconds(2)) {
                     LOG_INFO("目标信息: className=" + bestDet.className + 
-                            ", classId=" + std::to_string(bestDet.classId) +
                             ", confidence=" + std::to_string(bestDet.confidence) +
                             ", 位置=(" + std::to_string(targetCenterX) + "," + std::to_string(targetCenterY) + ")" +
-                            ", 图像中心=" + std::to_string(imageCenterX) +
-                            ", 偏差=" + std::to_string(xDeviation) +
-                            ", 中心稳定=" + (centerStable ? "是" : "否"));
+                            ", 偏差=" + std::to_string(xDeviation));
                     lastTargetLogTime = targetLogTime;
                 }
                 
-                // 锁定目标（优化：减少锁持有时间）
+                // 锁定目标
                 {
                     std::lock_guard<std::mutex> lock(g_gimbalMutex);
-                    
                     if (!g_targetLock.load()) {
-                        // 移除检测到目标的日志，减少输出（只在开始射击时输出）
                         lockStartTime = currentTime;
                         g_shooting = false;
-                        shootingLogPrinted = false;  // 重置射击日志标志
+                        shootingLogPrinted = false;
                     }
                     g_targetLock = true;
-                }  // 锁范围结束
+                }
                 
-                // 云台控制（在锁外执行，减少锁竞争）
+                // 云台控制
                 auto it = ELEVATION_MAPPING.find(bestDet.className);
                 if (it != ELEVATION_MAPPING.end()) {
                     std::lock_guard<std::mutex> lock(g_gimbalMutex);
                     gimbal->setPicAngle(it->second);
                     gimbal->sendCommand();
-                } else {
-                    // 诊断：如果找不到映射，输出警告
-                    static auto lastMappingWarnTime = std::chrono::steady_clock::now();
-                    auto mappingWarnTime = std::chrono::steady_clock::now();
-                    if (mappingWarnTime - lastMappingWarnTime >= std::chrono::seconds(5)) {
-                        LOG_WARNING("未找到className映射: " + bestDet.className + 
-                                   " (classId=" + std::to_string(bestDet.classId) + ")");
-                        lastMappingWarnTime = mappingWarnTime;
-                    }
                 }
                 
-                // 水平调整（在锁外计算，减少锁持有时间）
+                // 水平调整
                 if (!centerStable) {
                     int newAngle = g_currentYawAngle.load() + 
                                  (xDeviation > 0 ? -stepSize : stepSize);
@@ -427,12 +367,11 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                     }
                 }
                 
-                // 每0.5秒输出一次角度信息（检测到目标时）
+                // 每0.5秒输出一次角度信息
                 auto now = std::chrono::steady_clock::now();
                 if (now - lastTargetAngleLogTime >= targetAngleLogInterval) {
                     int currentPicAngle = gimbal->getCurrentPicAngle();
                     int currentYawAngle = g_currentYawAngle.load();
-                    // 每0.5秒都输出角度信息
                     LOG_INFO("云台角度 - 俯仰角: " + std::to_string(currentPicAngle) + 
                             ", 偏航角: " + std::to_string(currentYawAngle));
                     lastTargetAngleLogTime = now;
@@ -440,7 +379,7 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                 
                 statusText = centerStable ? "Centered" : "Adjusting";
                 
-                // 射击控制逻辑（只在检测到目标时输出）
+                // 射击控制逻辑
                 auto elapsedSinceLock = std::chrono::duration_cast<std::chrono::milliseconds>(
                     currentTime - lockStartTime).count() / 1000.0;
                 
@@ -454,7 +393,6 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                         g_shooting = true;
                         lastPulseSwitch = currentTime;
                         shootStatusText = "Firing";
-                        // 只在开始射击时输出一次（检测到目标时）
                         if (!shootingLogPrinted) {
                             LOG_INFO("开始射击" + g_targetType + "目标: " + bestDet.className);
                             shootingLogPrinted = true;
@@ -465,7 +403,6 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                         g_shooting = false;
                         lastPulseSwitch = currentTime;
                         shootStatusText = "Pulse Off";
-                        // 不输出暂停射击日志（减少输出）
                     } else {
                         shootStatusText = g_shooting.load() ? "Firing" : "Standby";
                     }
@@ -474,7 +411,6 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                     gimbal->stopShoot();
                     g_shooting = false;
                     shootStatusText = centerStable ? "Standby" : "Adjusting";
-                    // 如果不在中心区域，重置射击日志标志
                     if (!centerStable) {
                         shootingLogPrinted = false;
                     }
@@ -496,14 +432,12 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                          10, cv::Scalar(0, 0, 255), -1);
                 
             } else {
-                // 处理目标丢失（没有检测到目标，不输出射击相关信息）
+                // 处理目标丢失
                 {
                     std::lock_guard<std::mutex> lock(g_gimbalMutex);
                     gimbal->stopShoot();
                     g_shooting = false;
                 }
-                
-                // 重置射击日志标志（目标丢失时）
                 shootingLogPrinted = false;
                 
                 if (g_targetLock.load()) {
@@ -554,23 +488,6 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                        cv::Point(frame.cols - 300, 110), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                        cv::Scalar(0, 255, 255), 2);
             
-            // 显示帧时间（用于性能监控）
-            auto frameTime = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - frameStartTime).count();
-            std::string frameTimeText = "Frame: " + std::to_string(static_cast<int>(frameTime / 1000.0)) + 
-                                       "ms / " + std::to_string(static_cast<int>(targetFrameTime)) + "ms";
-            cv::Scalar frameTimeColor = (frameTime < targetFrameDuration.count()) ? 
-                                       cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
-            cv::putText(resultFrame, frameTimeText,
-                       cv::Point(frame.cols - 300, 140), cv::FONT_HERSHEY_SIMPLEX, 0.7,
-                       frameTimeColor, 2);
-            
-            // 绘制中心线
-            cv::line(resultFrame, 
-                    cv::Point(imageCenterX, 0),
-                    cv::Point(imageCenterX, frame.rows),
-                    cv::Scalar(255, 0, 0), 2);
-            
             // 显示俯仰角
             cv::putText(resultFrame, "Elevation: " + std::to_string(gimbal->getCurrentPicAngle()),
                        cv::Point(50, 200), cv::FONT_HERSHEY_SIMPLEX, 1,
@@ -581,10 +498,7 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                        cv::Point(50, 250), cv::FONT_HERSHEY_SIMPLEX, 1,
                        cv::Scalar(0, 255, 0), 2);
             
-            // 测量显示时间
-            auto displayStart = std::chrono::steady_clock::now();
-            
-            // 显示窗口（确保resultFrame有效）
+            // 显示窗口
             if (!resultFrame.empty() && resultFrame.cols > 0 && resultFrame.rows > 0) {
                 cv::imshow("Detection Results", resultFrame);
             }
@@ -592,11 +506,11 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             // 键盘控制
             int key = cv::waitKey(1) & 0xFF;
             if (key == 'q') {
-                // 移除退出日志，减少输出
                 g_running = false;
                 break;
             }
             
+            // 计算显示时间 (原本报错的地方)
             auto displayTime = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - displayStart).count();
             avgDisplayTime = avgDisplayTime * 0.9 + displayTime * 0.1;
@@ -610,6 +524,160 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             auto now = std::chrono::steady_clock::now();
             if (now - lastPerfLogTime >= perfLogInterval) {
                 LOG_INFO("性能统计 | "
+                        "获取帧: " + std::to_string(static_cast<int>(avgFrameAcquireTime / 1000.0)) + "ms | "
+                        "推理: " + std::to_string(static_cast<int>(avgDetectTime / 1000.0)) + "ms | "
+                        "显示: " + std::to_string(static_cast<int>(avgDisplayTime / 1000.0)) + "ms | "
+                        "总帧时间: " + std::to_string(static_cast<int>(avgTotalFrameTime / 1000.0)) + "ms | "
+                        "FPS: " + std::to_string(static_cast<int>(fps)));
+                lastPerfLogTime = now;
+            }
+            
+        } catch (const std::exception& e) {
+            LOG_ERROR("目标检测线程异常: " + std::string(e.what()));
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+    
+    // 清理资源
+    {
+        std::lock_guard<std::mutex> lock(g_gimbalMutex);
+        gimbal->stopShoot();
+        g_shooting = false;
+    }
+    
+    cv::destroyAllWindows();
+    LOG_INFO("目标检测线程已停止");
+}
+
+// 主函数
+int main(int /*argc*/, char* /*argv*/[]) {
+    LOG_INFO("=== 目标检测与云台控制系统启动 ===");
+    
+    // 设置日志级别和日志文件
+    Logger::getInstance().setLogLevel(LogLevel::INFO);
+    Logger::getInstance().setLogFile("rm_auto_attack.log");
+    
+    // 选择目标类型
+    selectTargetType();
+    LOG_INFO("系统目标类型设置为: " + g_targetType);
+    
+    try {
+        // 1. 初始化相机
+        LOG_INFO("正在初始化相机...");
+        MVSCamera camera;
+        if (!camera.initialize(0)) {
+            LOG_ERROR("相机初始化失败，程序退出");
+            return -1;
+        }
+        
+        if (!camera.startGrabbing()) {
+            LOG_ERROR("相机开始采集失败，程序退出");
+            return -1;
+        }
+        
+        // 2. 加载模型 - 修改：根据目标颜色选择对应的模型
+        LOG_INFO("加载目标检测模型（使用TensorRT加速）...");
+        YOLODetectorTensorRT detector;
+        
+        // 核心修改：根据 g_targetType 决定文件名
+        std::string modelFileName = (g_targetType == "red") ? "red.onnx" : "blue.onnx";
+        
+        // 尝试多个可能的模型路径
+        std::vector<std::string> possiblePaths = {
+            modelFileName,                                  // 当前目录
+            "../" + modelFileName,                          // 上一级目录
+            "../../" + modelFileName,                       // 项目根目录
+            "config/../" + modelFileName                    // 相对于配置目录
+        };
+        
+        std::string modelPath;
+        bool found = false;
+        for (const auto& path : possiblePaths) {
+            std::ifstream testFile(path);
+            if (testFile.good()) {
+                modelPath = path;
+                found = true;
+                testFile.close();
+                LOG_INFO("找到模型文件: " + modelPath);
+                break;
+            }
+            testFile.close();
+        }
+        
+        if (!found) {
+            LOG_ERROR("未找到模型文件: " + modelFileName);
+            LOG_ERROR("请确保已将 best.onnx 重命名为 " + modelFileName + " 并放置在正确目录下");
+            return -1;
+        }
+        
+        // 加载TensorRT模型（启用FP16加速）
+        LOG_INFO("加载TensorRT模型（首次运行会转换ONNX到TensorRT引擎，可能需要几分钟）...");
+        if (!detector.loadModel(modelPath, true)) {  // true = 使用FP16加速
+            LOG_ERROR("TensorRT模型加载失败，程序退出");
+            return -1;
+        }
+        
+        // 预热引擎（提高首次推理速度）
+        LOG_INFO("预热TensorRT引擎...");
+        detector.warmup(10);
+        LOG_INFO("✓ TensorRT引擎准备就绪");
+        
+        // 3. 初始化云台
+        LOG_INFO("初始化云台控制...");
+        GimbalController gimbal;
+        if (!gimbal.initialize("/dev/ttyACM0", 115200)) {
+            LOG_ERROR("云台初始化失败，程序退出");
+            return -1;
+        }
+        
+        // 4. 创建并启动线程（优化线程配置）
+        LOG_INFO("启动工作线程（优化配置）...");
+        
+        int cpuCores = ThreadOptimizer::getCPUCoreCount();
+        LOG_INFO("检测到 " + std::to_string(cpuCores) + " 个CPU核心");
+        
+        std::thread detectionThreadObj(detectionThread, &camera, &detector, &gimbal);
+        std::thread patrolThreadObj(patrolThread, &gimbal);
+        
+        // 设置检测线程为高优先级
+        ThreadOptimizer::setThreadPriority(detectionThreadObj, ThreadOptimizer::HIGH);
+        ThreadOptimizer::setThreadPriority(patrolThreadObj, ThreadOptimizer::NORMAL);
+        
+        LOG_INFO("✓ 线程优先级已设置（检测线程：高优先级，巡航线程：正常优先级）");
+        
+        // 5. 等待用户中断
+        LOG_INFO("系统运行中，按Ctrl+C或q键退出...");
+        
+        try {
+            while (g_running.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+        } catch (...) {
+            LOG_INFO("接收到中断信号，准备退出...");
+            g_running = false;
+        }
+        
+        // 6. 等待线程结束
+        if (detectionThreadObj.joinable()) {
+            detectionThreadObj.join();
+        }
+        if (patrolThreadObj.joinable()) {
+            patrolThreadObj.join();
+        }
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR("程序运行出错: " + std::string(e.what()));
+        return -1;
+    }
+    
+    // 清理资源
+    LOG_INFO("清理系统资源...");
+    g_running = false;
+    g_shooting = false;
+    
+    LOG_INFO("=== 系统已停止 ===");
+    return 0;
+}
                         "获取帧: " + std::to_string(static_cast<int>(avgFrameAcquireTime / 1000.0)) + "ms | "
                         "推理: " + std::to_string(static_cast<int>(avgDetectTime / 1000.0)) + "ms | "
                         "显示: " + std::to_string(static_cast<int>(avgDisplayTime / 1000.0)) + "ms | "
