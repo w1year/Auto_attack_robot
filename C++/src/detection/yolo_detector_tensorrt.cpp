@@ -331,25 +331,31 @@ bool YOLODetectorTensorRT::allocateBuffers() {
 }
 
 void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Input, const cudaStream_t& stream) {
-    // 1. 暴力缩放 (Direct Resize) - 不加黑边，直接拉伸到 640x640
+    // 等比例缩放 (Letterbox) 加灰边
+    float scale = std::min((float)m_inputWidth / image.cols, (float)m_inputHeight / image.rows);
+    int new_w = std::round(image.cols * scale);
+    int new_h = std::round(image.rows * scale);
+
     cv::Mat resized;
-    cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
-    
-    // 2. 颜色转换 (BGR -> RGB) - 修复颜色识别错误
-//    cv::Mat rgb;
-//    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-    cv::Mat rgb = resized;
-    // 3. 归一化 (0-255 -> 0.0-1.0)
+    cv::resize(image, resized, cv::Size(new_w, new_h));
+
+    cv::Mat padded(m_inputHeight, m_inputWidth, CV_8UC3, cv::Scalar(114, 114, 114));
+    int left = (m_inputWidth - new_w) / 2;
+    int top = (m_inputHeight - new_h) / 2;
+    resized.copyTo(padded(cv::Rect(left, top, new_w, new_h)));
+
+    // BGR -> RGB 转换
+    cv::Mat rgb;
+    cv::cvtColor(padded, rgb, cv::COLOR_BGR2RGB);
+
+    // 归一化
     cv::Mat normalized;
     rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
 
-    // 4. HWC -> CHW (通道分离)
+    // HWC -> CHW
     std::vector<cv::Mat> channels(3);
     cv::split(normalized, channels);
-
     int channelSize = m_inputWidth * m_inputHeight * sizeof(float);
-
-    // 拷贝到 GPU (R, G, B 顺序)
     cudaMemcpyAsync(gpu_Input, channels[0].data, channelSize, cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(gpu_Input + m_inputWidth * m_inputHeight, channels[1].data, channelSize, cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(gpu_Input + 2 * m_inputWidth * m_inputHeight, channels[2].data, channelSize, cudaMemcpyHostToDevice, stream);
@@ -370,8 +376,12 @@ std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput,
 
     // 3. 准备直接缩放的比例 (Direct Resize Scale)
     // 既然预处理是暴力拉伸，这里直接按长宽比还原，不再计算 padding
-    float scale_x = (float)imgWidth / m_inputWidth;
-    float scale_y = (float)imgHeight / m_inputHeight;
+//    float scale_x = (float)imgWidth / m_inputWidth;
+//    float scale_y = (float)imgHeight / m_inputHeight;
+
+    float scale = std::min((float)m_inputWidth / imgWidth, (float)m_inputHeight / imgHeight);
+    float pad_w = (m_inputWidth - imgWidth * scale) / 2.0f;
+    float pad_h = (m_inputHeight - imgHeight * scale) / 2.0f;
 
     std::vector<Detection> tempDetections;
     tempDetections.reserve(numAnchors);
@@ -409,11 +419,11 @@ std::vector<Detection> YOLODetectorTensorRT::postprocessOutput(float* gpuOutput,
         float w  = outputData[2 * numAnchors + i];
         float h  = outputData[3 * numAnchors + i];
 
-        // 坐标还原 (直接乘缩放比例)
-        float x_center = cx * scale_x;
-        float y_center = cy * scale_y;
-        float width    = w  * scale_x;
-        float height   = h  * scale_y;
+        // 坐标还原 (减去 padding 并除以 scale)
+        float x_center = (cx - pad_w) / scale;
+        float y_center = (cy - pad_h) / scale;
+        float width    = w / scale;
+        float height   = h / scale;
 
         // 转为左上角坐标 (x1, y1, x2, y2)
         int x1 = static_cast<int>(x_center - width * 0.5f);
@@ -535,7 +545,10 @@ void YOLODetectorTensorRT::setClassNames(const std::vector<std::string>& classNa
 }
 
 std::string YOLODetectorTensorRT::getClassName(int classId) const {
-    return "armor";
+    if (classId >= 0 && classId < static_cast<int>(m_classNames.size())) {
+                return m_classNames[classId];
+            }
+    return "unknown_" + std::to_string(classId);
 }
 
 int YOLODetectorTensorRT::adjustClassId(int classId) const {

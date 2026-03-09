@@ -271,7 +271,7 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             // 执行检测（TensorRT推理）
             auto detectStart = std::chrono::steady_clock::now();
             // 使用较高的阈值，因为模型是专用的
-            std::vector<Detection> allDetections = detector->detect(frame, 0.2f);
+            std::vector<Detection> allDetections = detector->detect(frame, 0.5f);
             auto detectTime = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - detectStart).count();
             
