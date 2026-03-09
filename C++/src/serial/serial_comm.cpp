@@ -276,13 +276,20 @@ bool SerialComm::openPort() {
     return true;
 }
 
+#ifndef _WIN32
 void SerialComm::closePort() {
+    // 将void* 转换回 int
     int fd = static_cast<int>(reinterpret_cast<intptr_t>(m_handle));
+    
     if (fd >= 0) {
         ::close(fd);
-        m_handle = reinterpret_cast<void*>(static_cast<intptr_t>(-1));
     }
+    
+    // 关键修复: 显式将句柄重置为 -1，防止悬空句柄
+    // 在 Linux 下，-1 代表无效的 fd
+    m_handle = reinterpret_cast<void*>(static_cast<intptr_t>(-1));
 }
+#endif
 
 bool SerialComm::sendData(const uint8_t* data, size_t length) {
     int fd = static_cast<int>(reinterpret_cast<intptr_t>(m_handle));

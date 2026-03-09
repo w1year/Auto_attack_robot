@@ -405,6 +405,7 @@ bool MVSCamera::configureDevice() {
 #endif
 }
 
+
 cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int pixelType) {
     cv::Mat frame;
     
@@ -416,74 +417,38 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
             int deviceCount = cv::cuda::getCudaEnabledDeviceCount();
             s_cudaAvailable = (deviceCount > 0);
             if (s_cudaAvailable) {
-                LOG_INFO("CUDA加速已启用，Bayer转换将使用GPU加速 (设备数量: " + std::to_string(deviceCount) + ")");
+                LOG_INFO("CUDA加速已启用，Bayer转换将使用GPU加速");
             } else {
-                LOG_WARNING("CUDA设备数量为0，Bayer转换将使用CPU (可能需要检查CUDA驱动)");
+                LOG_WARNING("CUDA设备数量为0，Bayer转换将使用CPU");
             }
-        } catch (const cv::Exception& e) {
-            s_cudaAvailable = false;
-            LOG_WARNING("CUDA检查失败，Bayer转换将使用CPU: " + std::string(e.what()));
         } catch (...) {
             s_cudaAvailable = false;
             LOG_WARNING("CUDA检查异常，Bayer转换将使用CPU");
         }
         s_cudaChecked = true;
     }
-#else
-    // 如果没有OPENCV_CUDA_ENABLED宏，说明编译时未启用CUDA
-    static bool cudaWarningPrinted = false;
-    if (!cudaWarningPrinted) {
-        LOG_WARNING("编译时未启用OpenCV CUDA支持，Bayer转换将使用CPU");
-        cudaWarningPrinted = true;
-    }
 #endif
 
     switch (pixelType) {
+        //以此类推，处理所有Bayer格式
         case PixelType_Gvsp_BayerRG8: {
             cv::Mat bayerImg(height, width, CV_8UC1, data);
 #ifdef OPENCV_CUDA_ENABLED
             if (s_cudaAvailable) {
-                // CUDA加速：使用GPU进行Bayer转换（这是最耗时的部分）
+                // CUDA加速：使用GPU进行Bayer转换
                 cv::cuda::GpuMat gpuBayer(bayerImg);
                 cv::cuda::GpuMat gpuBGR;
                 
-                // GPU上的Bayer转换（8-10ms -> 2-3ms）
+                // 注意：OpenCV默认输出BGR，这正是我们需要用于显示和OpenCV处理的格式
+                // 不需要再手动交换B和R通道，除非你的模型明确需要RGB输入且不进行预处理
                 cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerRG2BGR, 0, s_cudaStream);
                 
-                // 下载到CPU
                 gpuBGR.download(frame, s_cudaStream);
                 s_cudaStream.waitForCompletion();
-                
-                // 确保frame格式正确（BGR，3通道，8位）
-                if (frame.type() != CV_8UC3 || frame.channels() != 3) {
-                    LOG_ERROR("CUDA转换后图像格式错误: type=" + std::to_string(frame.type()) + 
-                             ", channels=" + std::to_string(frame.channels()) + 
-                             ", 回退到CPU转换");
-                    // 回退到CPU转换
-                    cv::cvtColor(bayerImg, frame, cv::COLOR_BayerRG2BGR);
-                }
-                
-                // CPU上交换B和R通道（很快，<1ms）
-                cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-                const int totalPixels = height * width;
-                #ifdef _OPENMP
-                #pragma omp parallel for
-                #endif
-                for (int i = 0; i < totalPixels; ++i) {
-                    std::swap(framePtr[i][0], framePtr[i][2]);  // 交换B和R
-                }
             } else {
 #endif
-            // CPU版本（fallback或CUDA不可用时）
+            // CPU版本
             cv::cvtColor(bayerImg, frame, cv::COLOR_BayerRG2BGR);
-            cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-            const int totalPixels = height * width;
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (int i = 0; i < totalPixels; ++i) {
-                std::swap(framePtr[i][0], framePtr[i][2]);  // 交换B和R
-            }
 #ifdef OPENCV_CUDA_ENABLED
             }
 #endif
@@ -493,39 +458,14 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
             cv::Mat bayerImg(height, width, CV_8UC1, data);
 #ifdef OPENCV_CUDA_ENABLED
             if (s_cudaAvailable) {
-                // CUDA加速：使用GPU进行Bayer转换（最耗时的部分）
                 cv::cuda::GpuMat gpuBayer(bayerImg);
                 cv::cuda::GpuMat gpuBGR;
                 cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerBG2BGR, 0, s_cudaStream);
                 gpuBGR.download(frame, s_cudaStream);
                 s_cudaStream.waitForCompletion();
-                
-                // 确保frame格式正确
-                if (frame.type() != CV_8UC3 || frame.channels() != 3) {
-                    LOG_ERROR("CUDA转换后图像格式错误，回退到CPU转换");
-                    cv::cvtColor(bayerImg, frame, cv::COLOR_BayerBG2BGR);
-                }
-                
-                // CPU上交换B和R通道（很快，<1ms）
-                cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-                const int totalPixels = height * width;
-                #ifdef _OPENMP
-                #pragma omp parallel for
-                #endif
-                for (int i = 0; i < totalPixels; ++i) {
-                    std::swap(framePtr[i][0], framePtr[i][2]);
-                }
             } else {
 #endif
             cv::cvtColor(bayerImg, frame, cv::COLOR_BayerBG2BGR);
-            cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-            const int totalPixels = height * width;
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (int i = 0; i < totalPixels; ++i) {
-                std::swap(framePtr[i][0], framePtr[i][2]);
-            }
 #ifdef OPENCV_CUDA_ENABLED
             }
 #endif
@@ -540,33 +480,9 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
                 cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerGB2BGR, 0, s_cudaStream);
                 gpuBGR.download(frame, s_cudaStream);
                 s_cudaStream.waitForCompletion();
-                
-                // 确保frame格式正确
-                if (frame.type() != CV_8UC3 || frame.channels() != 3) {
-                    LOG_ERROR("CUDA转换后图像格式错误，回退到CPU转换");
-                    cv::cvtColor(bayerImg, frame, cv::COLOR_BayerGB2BGR);
-                }
-                
-                // CPU上交换B和R通道
-                cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-                const int totalPixels = height * width;
-                #ifdef _OPENMP
-                #pragma omp parallel for
-                #endif
-                for (int i = 0; i < totalPixels; ++i) {
-                    std::swap(framePtr[i][0], framePtr[i][2]);
-                }
             } else {
 #endif
             cv::cvtColor(bayerImg, frame, cv::COLOR_BayerGB2BGR);
-            cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-            const int totalPixels = height * width;
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (int i = 0; i < totalPixels; ++i) {
-                std::swap(framePtr[i][0], framePtr[i][2]);
-            }
 #ifdef OPENCV_CUDA_ENABLED
             }
 #endif
@@ -581,33 +497,9 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
                 cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerGR2BGR, 0, s_cudaStream);
                 gpuBGR.download(frame, s_cudaStream);
                 s_cudaStream.waitForCompletion();
-                
-                // 确保frame格式正确
-                if (frame.type() != CV_8UC3 || frame.channels() != 3) {
-                    LOG_ERROR("CUDA转换后图像格式错误，回退到CPU转换");
-                    cv::cvtColor(bayerImg, frame, cv::COLOR_BayerGR2BGR);
-                }
-                
-                // CPU上交换B和R通道
-                cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-                const int totalPixels = height * width;
-                #ifdef _OPENMP
-                #pragma omp parallel for
-                #endif
-                for (int i = 0; i < totalPixels; ++i) {
-                    std::swap(framePtr[i][0], framePtr[i][2]);
-                }
             } else {
 #endif
             cv::cvtColor(bayerImg, frame, cv::COLOR_BayerGR2BGR);
-            cv::Vec3b* framePtr = frame.ptr<cv::Vec3b>();
-            const int totalPixels = height * width;
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (int i = 0; i < totalPixels; ++i) {
-                std::swap(framePtr[i][0], framePtr[i][2]);
-            }
 #ifdef OPENCV_CUDA_ENABLED
             }
 #endif
@@ -620,13 +512,10 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
         }
         case PixelType_Gvsp_RGB8_Packed:
         case PixelType_Gvsp_BGR8_Packed: {
-            // 优化：减少数据复制，直接创建Mat视图，只在需要转换时才复制
             cv::Mat rgbImg(height, width, CV_8UC3, data);
             if (pixelType == PixelType_Gvsp_RGB8_Packed) {
-                // 需要转换RGB到BGR，必须复制
                 cv::cvtColor(rgbImg, frame, cv::COLOR_RGB2BGR);
             } else {
-                // BGR8_Packed不需要转换，直接使用（注意：data会在外部释放，需要clone）
                 frame = rgbImg.clone();
             }
             break;
@@ -637,12 +526,12 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
             break;
     }
 #else
-    // 临时实现：创建空白图像
     frame = cv::Mat::zeros(height, width, CV_8UC3);
 #endif
     
     return frame;
 }
+
 
 // 颜色阈值分割：从Bayer格式提取红色或蓝色通道的灰度信息
 } // namespace rm_auto_attack

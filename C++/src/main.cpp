@@ -71,82 +71,84 @@ void selectTargetType() {
 }
 
 // 巡航线程
+
 void patrolThread(GimbalController* gimbal) {
-    // 设置线程优先级和名称（巡航线程使用正常优先级）
+    // 设置线程优先级和名称
     ThreadOptimizer::setThreadName("PatrolThread");
     ThreadOptimizer::setCurrentThreadPriority(ThreadOptimizer::NORMAL, -1);
     
     LOG_INFO("启动云台巡航线程");
     
     // 巡航参数
-    int centerAngle = 15000;  // 中心位置
-    int patrolRange = 13000;  // 巡航范围
-    int leftLimit = centerAngle + patrolRange;   // 左侧限制 (28000)
-    int rightLimit = centerAngle - patrolRange;  // 右侧限制 (2000)
+    const int centerAngle = 15000;  // 中心位置
+    const int patrolRange = 13000;  // 巡航范围
+    const int leftLimit = centerAngle + patrolRange;
+    const int rightLimit = centerAngle - patrolRange;
     
-    // 巡航速度参数
-    int patrolSpeed = 50;     // 每次移动步长
-    double patrolDelay = 0.03; // 延迟时间（秒）
-    
-    // 平滑移动参数
-    int accelerationZone = 500;  // 加减速区域
-    int minSpeed = 30;           // 最小速度
+    // 巡航动态参数
+    int patrolSpeed = 50;
+    double patrolDelay = 0.03; 
     
     int currentAngle = centerAngle;
     int direction = 1;  // 1:向左, -1:向右
     
-    // 角度输出控制（每秒输出一次）
+    // 角度输出控制
     auto lastAngleLogTime = std::chrono::steady_clock::now();
     const auto angleLogInterval = std::chrono::seconds(1);
     
     while (g_running.load()) {
         try {
-            // 只有在巡航启用且未锁定目标时才进行巡航
-            if (g_patrolEnabled.load() && !g_targetLock.load()) {
+            // 检查点1: 如果已锁定目标或未启用巡航，直接进入等待，释放CPU
+            if (!g_patrolEnabled.load() || g_targetLock.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                // 更新当前角度变量，防止重新接管时跳变
+                currentAngle = g_currentYawAngle.load();
+                continue;
+            }
+
+            // 计算新角度逻辑 (纯计算，不涉及IO，不需要锁)
+            int distanceToLeft = leftLimit - currentAngle;
+            int distanceToRight = currentAngle - rightLimit;
+            
+            // 简单的加减速逻辑
+            int currentSpeed = patrolSpeed;
+            if (direction > 0 && distanceToLeft < 500) {
+                 currentSpeed = std::max(30, static_cast<int>(patrolSpeed * (distanceToLeft / 500.0)));
+            } else if (direction < 0 && distanceToRight < 500) {
+                 currentSpeed = std::max(30, static_cast<int>(patrolSpeed * (distanceToRight / 500.0)));
+            }
+            
+            int nextAngle = currentAngle + currentSpeed * direction;
+            
+            // 边界检查
+            if (nextAngle >= leftLimit) {
+                nextAngle = leftLimit;
+                direction = -1;
+            } else if (nextAngle <= rightLimit) {
+                nextAngle = rightLimit;
+                direction = 1;
+            }
+            
+            // 关键修改: 在执行硬件IO和更新全局状态前，再次检查锁定状态
+            // 使用互斥锁保护对云台的写操作
+            {
                 std::lock_guard<std::mutex> lock(g_gimbalMutex);
                 
-                // 计算距离边界的距离
-                int distanceToLeft = leftLimit - currentAngle;
-                int distanceToRight = currentAngle - rightLimit;
-                
-                // 根据接近边界的距离动态调整速度
-                int currentSpeed = patrolSpeed;
-                if (direction > 0 && distanceToLeft < accelerationZone) {
-                    // 接近左边界，减速
-                    double speedFactor = std::max(0.1, static_cast<double>(distanceToLeft) / accelerationZone);
-                    currentSpeed = std::max(minSpeed, static_cast<int>(patrolSpeed * speedFactor));
-                } else if (direction < 0 && distanceToRight < accelerationZone) {
-                    // 接近右边界，减速
-                    double speedFactor = std::max(0.1, static_cast<double>(distanceToRight) / accelerationZone);
-                    currentSpeed = std::max(minSpeed, static_cast<int>(patrolSpeed * speedFactor));
-                }
-                
-                // 计算新角度
-                currentAngle += currentSpeed * direction;
-                
-                // 检查是否到达边界
-                if (currentAngle >= leftLimit) {
-                    currentAngle = leftLimit;
-                    direction = -1;
-                    // 移除边界日志，减少输出
-                } else if (currentAngle <= rightLimit) {
-                    currentAngle = rightLimit;
-                    direction = 1;
-                    // 移除边界日志，减少输出
-                }
-                
-                // 设置新角度
-                gimbal->setYawAngle(currentAngle);
-                g_currentYawAngle = currentAngle;
-                
-                // 每秒输出一次角度信息（巡航时）
-                auto now = std::chrono::steady_clock::now();
-                int currentPicAngle = gimbal->getCurrentPicAngle();
-                if (now - lastAngleLogTime >= angleLogInterval) {
-                    // 每秒都输出角度信息
-                    LOG_INFO("云台角度 - 俯仰角: " + std::to_string(currentPicAngle) + 
-                            ", 偏航角: " + std::to_string(currentAngle));
-                    lastAngleLogTime = now;
+                // 检查点2: 再次确认是否被检测线程抢占
+                if (!g_targetLock.load()) {
+                    currentAngle = nextAngle;
+                    gimbal->setYawAngle(currentAngle);
+                    g_currentYawAngle = currentAngle; // 更新全局状态
+                    
+                    // 日志输出
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - lastAngleLogTime >= angleLogInterval) {
+                        // LOG_INFO("巡航中: " + std::to_string(currentAngle)); // 减少日志刷屏
+                        lastAngleLogTime = now;
+                    }
+                } else {
+                    // 如果被锁定了，立即放弃本次移动
+                    currentAngle = g_currentYawAngle.load();
                 }
             }
             
@@ -497,7 +499,11 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
             cv::putText(resultFrame, "Target Type: " + g_targetType,
                        cv::Point(50, 250), cv::FONT_HERSHEY_SIMPLEX, 1,
                        cv::Scalar(0, 255, 0), 2);
-            
+//            if(!frame.empty()) 
+//            {
+//                
+//               cv::imshow("Robomaster Auto Attack", displayFrame);
+//            }
             // 显示窗口
             if (!resultFrame.empty() && resultFrame.cols > 0 && resultFrame.rows > 0) {
                 cv::imshow("Detection Results", resultFrame);

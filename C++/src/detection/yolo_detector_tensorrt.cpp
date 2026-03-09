@@ -336,9 +336,9 @@ void YOLODetectorTensorRT::preprocessImage(const cv::Mat& image, float* gpu_Inpu
     cv::resize(image, resized, cv::Size(m_inputWidth, m_inputHeight));
     
     // 2. 颜色转换 (BGR -> RGB) - 修复颜色识别错误
-    cv::Mat rgb;
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-
+//    cv::Mat rgb;
+//    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+    cv::Mat rgb = resized;
     // 3. 归一化 (0-255 -> 0.0-1.0)
     cv::Mat normalized;
     rgb.convertTo(normalized, CV_32F, 1.0 / 255.0);
