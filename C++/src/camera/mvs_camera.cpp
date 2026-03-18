@@ -441,14 +441,14 @@ cv::Mat MVSCamera::convertToMat(unsigned char* data, int width, int height, int 
                 
                 // 注意：OpenCV默认输出BGR，这正是我们需要用于显示和OpenCV处理的格式
                 // 不需要再手动交换B和R通道，除非你的模型明确需要RGB输入且不进行预处理
-                cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerRG2BGR, 0, s_cudaStream);
+                cv::cuda::cvtColor(gpuBayer, gpuBGR, cv::COLOR_BayerBG2BGR, 0, s_cudaStream);
                 
                 gpuBGR.download(frame, s_cudaStream);
                 s_cudaStream.waitForCompletion();
             } else {
 #endif
             // CPU版本
-            cv::cvtColor(bayerImg, frame, cv::COLOR_BayerRG2BGR);
+            cv::cvtColor(bayerImg, frame, cv::COLOR_BayerBG2BGR);
 #ifdef OPENCV_CUDA_ENABLED
             }
 #endif

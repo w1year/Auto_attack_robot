@@ -585,6 +585,11 @@ int main(int /*argc*/, char* /*argv*/[]) {
         LOG_INFO("加载目标检测模型（使用TensorRT加速）...");
         YOLODetectorTensorRT detector;
         
+        if(g_targetType == "red") {
+            detector.setClassNames({"red100", "red200", "red300", "red400", "red500"});
+        } else {
+            detector.setClassNames({"blue100", "blue200", "blue300", "blue400", "blue500"});
+        }
         // 核心修改：根据 g_targetType 决定文件名
         std::string modelFileName = (g_targetType == "red") ? "red.onnx" : "blue.onnx";
         
