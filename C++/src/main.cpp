@@ -163,6 +163,27 @@ void patrolThread(GimbalController* gimbal) {
     LOG_INFO("云台巡航线程已停止");
 }
 
+int calculatePitchAngleByHeight(int boxHeight) {
+    // 基础参数设置 (需要您在实际场地中重新标定)
+    const int MIN_HEIGHT = 20;       // 假设：距离最远时，目标框的最小像素高度
+    const int MAX_HEIGHT = 200;      // 假设：距离最近时，目标框的最大像素高度
+    
+    // 对应的云台俯仰角度 (参考了原代码的 6000 ~ 20000 范围)
+    const int ANGLE_FAR = 6000;      // 目标远 (框小) 对应的俯仰角
+    const int ANGLE_NEAR = 20000;    // 目标近 (框大) 对应的俯仰角
+    
+    // 1. 限制高度范围，防止异常值导致角度突变
+    int clampedHeight = std::max(MIN_HEIGHT, std::min(MAX_HEIGHT, boxHeight));
+    
+    // 2. 线性映射计算 (框高 -> 角度)
+    // 算法：根据高度在 [MIN_HEIGHT, MAX_HEIGHT] 中的比例，映射到 [ANGLE_FAR, ANGLE_NEAR]
+    double ratio = static_cast<double>(clampedHeight - MIN_HEIGHT) / (MAX_HEIGHT - MIN_HEIGHT);
+    int targetPicAngle = ANGLE_FAR + static_cast<int>(ratio * (ANGLE_NEAR - ANGLE_FAR));
+    
+    // 3. 安全限制：确保输出角度在云台的合法范围 0~30000 内
+    return std::max(0, std::min(30000, targetPicAngle));
+}
+
 // 检测线程
 // 检测线程 (完整版，保留所有绘制和控制逻辑)
 void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalController* gimbal) {
@@ -350,10 +371,16 @@ void detectionThread(MVSCamera* camera, YOLODetectorTensorRT* detector, GimbalCo
                 }
                 
                 // 云台控制
-                auto it = ELEVATION_MAPPING.find(bestDet.className);
-                if (it != ELEVATION_MAPPING.end()) {
+                // 1. 计算目标框的竖直方向大小 (高度)
+                int boxHeight = bestDet.y2 - bestDet.y1;
+                
+                // 2. 调用独立函数计算目标俯仰角
+                int targetPicAngle = calculatePitchAngleByHeight(boxHeight);
+                
+                // 3. 发送俯仰角指令
+                {
                     std::lock_guard<std::mutex> lock(g_gimbalMutex);
-                    gimbal->setPicAngle(it->second);
+                    gimbal->setPicAngle(targetPicAngle);
                     gimbal->sendCommand();
                 }
                 
