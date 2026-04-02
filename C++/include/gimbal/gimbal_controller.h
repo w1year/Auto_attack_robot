@@ -59,6 +59,9 @@ public:
     // 获取接收到的状态 (CAN ID 07FF)
     void getReceivedStatus(uint16_t& pic, uint16_t& yaw, uint16_t& shoot, uint16_t& idle) const;
 
+    // 获取阵营代码 (0:未收到, 1:红, 2:蓝)
+    uint8_t getTargetColorCode() const { return m_targetColorCode.load(); }
+
 private:
     SerialComm m_serial;
     std::atomic<bool> m_initialized;
@@ -91,6 +94,8 @@ private:
     
     // 限制角度范围
     int clampAngle(int angle) const;
+    
+    std::atomic<uint8_t> m_targetColorCode{0};
 };
 
 } // namespace rm_auto_attack

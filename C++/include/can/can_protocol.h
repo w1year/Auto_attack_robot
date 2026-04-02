@@ -61,6 +61,12 @@ public:
         uint8_t& data3,
         uint8_t& data4
     );
+
+    // 解析CAN ID为0x610的数据 (用于阵营识别)
+    static bool parseCAN0610(
+        const std::vector<uint8_t>& data,
+        uint8_t& colorCode
+    );
     
     // 十六进制转二进制字符串 (根据Python代码中的hex_to_bin函数)
     static std::string hexToBin(const std::string& hexStr);
